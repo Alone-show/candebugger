@@ -1,0 +1,4 @@
+# ZLG USBCANFD-200U (VID:PID = 3068:0009)
+# 安装：sudo cp udev/50-usbcanfd.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger
+# 重新插拔设备后，普通用户即可访问。
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="3068", ATTRS{idProduct}=="0009", GROUP="users", MODE="0666"

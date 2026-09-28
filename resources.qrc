@@ -1,0 +1,26 @@
+<RCC>
+    <qresource prefix="/qml">
+        <file alias="Main.qml">src/qml/Main.qml</file>
+        <file alias="Theme.qml">src/qml/Theme.qml</file>
+        <file alias="DevicePanel.qml">src/qml/DevicePanel.qml</file>
+        <file alias="ReceiveView.qml">src/qml/ReceiveView.qml</file>
+        <file alias="SendPanel.qml">src/qml/SendPanel.qml</file>
+        <file alias="PeriodicPanel.qml">src/qml/PeriodicPanel.qml</file>
+        <file alias="StatisticsPanel.qml">src/qml/StatisticsPanel.qml</file>
+        <file alias="RecordPanel.qml">src/qml/RecordPanel.qml</file>
+        <file alias="SendWorkspace.qml">src/qml/SendWorkspace.qml</file>
+        <file alias="components/AppButton.qml">src/qml/components/AppButton.qml</file>
+        <file alias="components/AppCard.qml">src/qml/components/AppCard.qml</file>
+        <file alias="components/AppCheckBox.qml">src/qml/components/AppCheckBox.qml</file>
+        <file alias="components/AppComboBox.qml">src/qml/components/AppComboBox.qml</file>
+        <file alias="components/AppRadioButton.qml">src/qml/components/AppRadioButton.qml</file>
+        <file alias="components/AppTextField.qml">src/qml/components/AppTextField.qml</file>
+        <file alias="components/ChannelBadge.qml">src/qml/components/ChannelBadge.qml</file>
+        <file alias="components/Icon.qml">src/qml/components/Icon.qml</file>
+        <file alias="components/MetricCard.qml">src/qml/components/MetricCard.qml</file>
+        <file alias="components/SectionHeader.qml">src/qml/components/SectionHeader.qml</file>
+        <file alias="components/SlimScrollBar.qml">src/qml/components/SlimScrollBar.qml</file>
+        <file alias="components/StatusDot.qml">src/qml/components/StatusDot.qml</file>
+        <file alias="components/ToolbarButton.qml">src/qml/components/ToolbarButton.qml</file>
+    </qresource>
+</RCC>
