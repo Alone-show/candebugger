@@ -30,7 +30,7 @@ TestCase {
         var comps = ["AppButton", "AppCard", "AppCheckBox", "AppComboBox",
                      "AppRadioButton", "AppTextField", "ChannelBadge", "Icon",
                      "MetricCard", "SectionHeader", "SlimScrollBar", "StatusDot",
-                     "ToolbarButton"]
+                     "ToolbarButton", "WindowButton"]
         for (var j = 0; j < comps.length; ++j) {
             var cc = Qt.createComponent("qrc:/qml/components/" + comps[j] + ".qml")
             compare(cc.status, Component.Ready, comps[j] + ": " + cc.errorString())

@@ -45,7 +45,9 @@
 
 ## 界面布局
 深色专业主题（参考 USB-CAN Pro v2.0 设计稿），四区布局：
-- 顶部工具条：品牌 + 设备状态徽章（在线/离线、SN、版本）+ 快捷动作
+- 顶部标题栏（**无边框自绘**，一行到底）：品牌 + 版本 + 设备状态徽章（在线/离线、SN、版本）
+  + 记录中/帮助/设置，最右侧为最小化 / 最大化-还原 / 关闭；标题栏空白处可拖动窗口、
+  双击最大化-还原，窗口四边四角 5px 热区可缩放
 - 左栏「通道配置」：连接/断开设备与信息、CAN1/CAN2 配置卡（仲裁/数据波特率、工作模式、
   终端电阻、采样点）、合并接收开关、应用配置（连接后自动开始接收，改配置后点「应用配置」
   重启通道；连接/配置在后台线程执行，GUI 不阻塞）
@@ -55,6 +57,16 @@
 - 右栏「统计与总线负载」：RX/TX/ERR/总线状态卡片、负载仪表、负载与帧率趋势
   （`RealtimePlot`）、错误计数与清零、报文 Top-N
 - 底部「发送工作区」：单帧发送 / 周期发送 / 记录回放 三个页签
+
+### 无边框标题栏的拖动 / 缩放（按后端分流）
+标题栏用 `Qt.FramelessWindowHint` 去掉系统装饰后，拖动与缩放按窗口后端走两条路
+（后端名由 `main.cpp` 注入的 `platformName` = `QGuiApplication::platformName()` 区分）：
+- **Wayland**：调用 QML `Window.startSystemMove()` / `startSystemResize(edges)` 交给合成器，
+  吸附、平铺、跨屏、解除最大化等都由窗口管理器完成（Wayland 下客户端本来就无法设置窗口位置）。
+- **X11（xcb）**：Qt 5.15 的实现只是往根窗口发一条 `_NET_WM_MOVERESIZE` 客户端消息，
+  然后**无条件返回 `true`**；实测 KWin 会忽略由运动事件触发的移动请求（调用成功但窗口不动），
+  因此 X11 下改为 QML 自己计算位置与尺寸（`window.x/y/width/height`），不依赖窗口管理器。
+- 拖动有 4px 阈值（`theme.dragThreshold`）：阈值内不启动拖动，保证单击/双击最大化可用。
 
 ## 线程模型
 - **接收**：独立 `RxWorker` 线程 + 环形缓冲 + 30Hz 合并刷新。
@@ -109,7 +121,8 @@ ui/CanDebugger/
 │            PeriodicPanel, StatisticsPanel, RecordPanel,
 │            components/ (AppButton, AppCard, AppCheckBox, AppComboBox,
 │            AppRadioButton, AppTextField, ChannelBadge, Icon, MetricCard,
-│            SectionHeader, SlimScrollBar, StatusDot, ToolbarButton)
+│            SectionHeader, SlimScrollBar, StatusDot, ToolbarButton,
+│            WindowButton)
 ├─ tests/  单元：test_bittiming, test_buffer_model, test_framebuilder,
 │          test_periodicsender, test_canfilter, test_statistics,
 │          test_periodicsender, test_canfilter, test_statistics, test_plotring,

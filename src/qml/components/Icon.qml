@@ -38,7 +38,12 @@ Item {
         "chart":        { "path": "M3 13 V8 M7 13 V4 M11 13 V6 M2 13 H14", "fill": false },
         "record":       { "path": "M8 3 A5 5 0 1 0 8 13 A5 5 0 1 0 8 3", "fill": false },
         "loop":         { "path": "M4 6 H11 A2 2 0 0 1 11 10 H5 M4 6 L6 4 M4 6 L6 8 M12 10 L10 8 M12 10 L10 12", "fill": false },
-        "link":         { "path": "M6.5 9.5 L9.5 6.5 M5.5 7 L4 8.5 A2.2 2.2 0 0 0 7 11.5 L8.5 10 M10.5 9 L12 7.5 A2.2 2.2 0 0 0 9 4.5 L7.5 6", "fill": false }
+        "link":         { "path": "M6.5 9.5 L9.5 6.5 M5.5 7 L4 8.5 A2.2 2.2 0 0 0 7 11.5 L8.5 10 M10.5 9 L12 7.5 A2.2 2.2 0 0 0 9 4.5 L7.5 6", "fill": false },
+        // ---- 自绘标题栏的窗口按钮 ----
+        "winMinimize":  { "path": "M3.5 8 H12.5", "fill": false },
+        "winMaximize":  { "path": "M3.5 3.5 H12.5 V12.5 H3.5 Z", "fill": false },
+        "winRestore":   { "path": "M3.5 3.5 H10.5 V10.5 H3.5 Z M5.5 5.5 H12.5 V12.5 H5.5", "fill": false },
+        "winClose":     { "path": "M4 4 L12 12 M12 4 L4 12", "fill": false }
     })
 
     onNameChanged: canvas.requestPaint()

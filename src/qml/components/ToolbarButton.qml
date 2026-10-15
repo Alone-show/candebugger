@@ -15,6 +15,10 @@ Button {
     font.pixelSize: 12
     font.family: theme ? theme.sansFamily : "sans-serif"
 
+    HoverHandler {
+        cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+    }
+
     contentItem: Row {
         id: row
         spacing: 5

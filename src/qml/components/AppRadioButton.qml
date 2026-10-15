@@ -11,6 +11,10 @@ RadioButton {
     font.pixelSize: 12
     font.family: theme ? theme.sansFamily : "sans-serif"
 
+    HoverHandler {
+        cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+    }
+
     indicator: Rectangle {
         implicitWidth: 16
         implicitHeight: 16

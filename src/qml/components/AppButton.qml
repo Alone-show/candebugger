@@ -14,6 +14,10 @@ Button {
     font.bold: variant === "primary" || variant === "success" || variant === "danger"
     font.family: theme ? theme.sansFamily : "sans-serif"
 
+    HoverHandler {
+        cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+    }
+
     function baseColor() {
         if (!theme)
             return "transparent"
@@ -70,8 +74,9 @@ Button {
                 return Qt.darker(base, 1.2)
             return control.hovered ? Qt.lighter(base, 1.12) : base
         }
-        border.width: control.variant === "ghost" ? 1 : 0
-        border.color: control.theme ? control.theme.borderLight : "#2a3b53"
+        border.width: (control.variant === "ghost" || control.activeFocus) ? 1 : 0
+        border.color: control.activeFocus ? (control.theme ? control.theme.accent : "#38bdf8")
+                                          : (control.theme ? control.theme.borderLight : "#2a3b53")
         opacity: control.enabled ? 1.0 : 0.4
     }
 }

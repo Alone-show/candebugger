@@ -53,6 +53,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("recorder"), &recorder);
     engine.rootContext()->setContextProperty(QStringLiteral("replayer"), &replayer);
     engine.rootContext()->setContextProperty(QStringLiteral("deviceController"), &deviceController);
+    // 无边框标题栏的拖动/缩放策略按后端分流（Wayland 交给合成器，X11 自算）
+    engine.rootContext()->setContextProperty(QStringLiteral("platformName"),
+                                             QGuiApplication::platformName());
 
     statistics.start(1000);
 

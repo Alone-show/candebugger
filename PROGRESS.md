@@ -78,6 +78,8 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 - 设备：`USBCANFD-200U HW=0x0300 FW=0x0252`，对端为另一块 ZLG CAN 卡（对端在 ch0 总线，ch1 无对端）。
 
 **待办 / 下一步**：
+- [ ] 无边框自绘标题栏手工复核（本次已落地，见「步骤 13」）：拖动移动、双击最大化/还原、
+      四边四角缩放、最小化/关闭按钮、任务栏与 Alt-Tab 标题是否正常。
 - [ ] App 里选 125k / 250k / 500k / 1M →「应用配置」→ 与对端互发复测（卡片只显示位定时，无「已标定」前缀了）。
 - [ ] 数据域（CANFD 加速段）实测复核：80MHz 下公式给 2M→`brp1/tseg16/1`(SP 90%)、
       4M→`brp1/tseg6/1`(SP 80%)、5M→`brp1/tseg4/1`(SP 75%)。
@@ -298,6 +300,30 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
   - 接线 `recorder`/`replayer` 上下文属性；中文文案、Theme 传递
 - 验证：构建通过；`ctest` 9/9；`QT_QPA_PLATFORM=offscreen` 启动驻留 5s，stderr 无 QML 警告/错误
   （修复了记录状态灯 anchors-in-layout 警告）
+
+## 步骤 13 — 无边框自绘标题栏 ✅ 完成（离线验证 + X11 交互实测）
+- 产出：`src/qml/Main.qml`（`Qt.FramelessWindowHint`，标题栏与原工具条合并为一行）、
+  `src/qml/components/WindowButton.qml`（新增）、`Icon.qml` 新增 4 个窗口按钮图标、
+  `Theme.qml` 新增标题栏令牌（高度/按钮宽/hover/按下/关闭红/缩放热区/拖动阈值）、
+  `resources.qrc` 登记新组件；`main.cpp` 注入 `platformName` 上下文属性
+- 实现：
+  - 标题栏：品牌 + 版本 + 设备状态徽章 + 记录中/帮助/设置 + 右侧最小化/最大化-还原/关闭；
+    非活动窗口标题栏变暗（`window.active`）
+  - 交互：空白区拖动移动窗口、双击最大化/还原、四边+四角 5px 热区缩放（带对角光标）、
+    最大化/全屏时热区整体隐藏；拖动有 4px 阈值，避免吃掉单击/双击
+  - **拖动/缩放按后端分流**（关键坑）：Wayland 交给合成器
+    （`startSystemMove`/`startSystemResize`，吸附/平铺由 WM 完成）；X11 下 Qt 5.15 只是发一条
+    `_NET_WM_MOVERESIZE` 就无条件返回 `true`，实测 KWin 忽略运动事件触发的移动请求
+    （调用成功但窗口纹丝不动）→ X11 改为 QML 自算 `window.x/y/width/height`，不依赖 WM
+  - 顺带打磨：按钮类补 `Qt.PointingHandCursor`、`AppButton` 焦点环、报文表空态占位文案
+- 验证：
+  - `ctest` **13/13 通过**（`tst_panels` 编译清单加了 `WindowButton`）
+  - `QT_QPA_PLATFORM=offscreen ./build/CanDebugger` 无 QML 报错
+  - 真实会话（KDE + Wayland，用 `QT_QPA_PLATFORM=xcb` 走 X11 分支）通过 `xdotool` 注入指针事件实测：
+    标题栏拖动位移与指针位移一致、四边/四角缩放尺寸按拖距变化、双击最大化/还原往返正常、
+    最小化/最大化/关闭按钮生效（关闭后进程退出）
+  - 测试脚本（未入库）：`/tmp/opencode/verify_x11.sh`（真实显示）、
+    `/tmp/opencode/run_isolated.sh` + `/tmp/opencode/verify_window.sh`（Xvfb + KWin 隔离环境）
 
 ---
 

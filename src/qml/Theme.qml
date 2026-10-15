@@ -10,7 +10,13 @@ QtObject {
     readonly property color card: "#131d31"
     readonly property color panelAlt: "#182338"
     readonly property color inputBg: "#0b1322"
+
+    // ---- 自绘标题栏（无边框窗口）----
     readonly property color titlebar: "#080b12"
+    readonly property color titlebarInactive: "#0a0e17"
+    readonly property color titlebarHover: "#1b2637"
+    readonly property color titlebarPress: "#26344a"
+    readonly property color titlebarClose: "#e81123"
 
     // ---- 边框 ----
     readonly property color border: "#1e293b"
@@ -44,6 +50,12 @@ QtObject {
     readonly property int radius: 8
     readonly property int radiusSm: 5
     readonly property int spacing: 8
+
+    // ---- 标题栏 / 无边框拖拽区尺寸 ----
+    readonly property int titlebarHeight: 46
+    readonly property int titlebarButtonWidth: 46
+    readonly property int resizeMargin: 5
+    readonly property int dragThreshold: 4
 
     function channelColor(index) {
         return index === 0 ? ch1 : (index === 1 ? ch2 : textDim)

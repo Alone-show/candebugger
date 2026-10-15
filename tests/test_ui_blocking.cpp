@@ -108,6 +108,7 @@ struct Harness
         ctx->setContextProperty(QStringLiteral("recorder"), recorder);
         ctx->setContextProperty(QStringLiteral("replayer"), replayer);
         ctx->setContextProperty(QStringLiteral("deviceController"), controller);
+        ctx->setContextProperty(QStringLiteral("platformName"), QGuiApplication::platformName());
 
         engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
         return !engine.rootObjects().isEmpty();
@@ -116,6 +117,10 @@ struct Harness
 
 bool isClickable(QObject *o)
 {
+    // 标题栏窗口按钮（winBtnMin / winBtnMax / winBtnClose）不属于内容交互：
+    // 点下去会最小化 / 最大化 / 关闭窗口，会让探针提前退出并给出「假通过」。
+    if (o && o->objectName().startsWith(QLatin1String("winBtn")))
+        return false;
     return o && o->metaObject()->indexOfSignal("clicked()") >= 0;
 }
 

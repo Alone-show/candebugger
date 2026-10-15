@@ -279,132 +279,149 @@ Rectangle {
         }
 
         // ---------------- 报文列表 ----------------
-        ListView {
-            id: list
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            model: rx.frameModel
-            boundsBehavior: Flickable.StopAtBounds
-            reuseItems: true
-            ScrollBar.vertical: SlimScrollBar { theme: view.theme }
 
-            onCountChanged: {
-                // 贴底跟随：直接设置 contentY，避免 positionViewAtEnd() 在大列表下的扫描开销
-                if (autoScroll.checked && !rx.paused)
-                    Qt.callLater(function() {
-                        list.contentY = Math.max(0, list.contentHeight - list.height)
-                    })
+            ListView {
+                id: list
+                anchors.fill: parent
+                clip: true
+                model: rx.frameModel
+                boundsBehavior: Flickable.StopAtBounds
+                reuseItems: true
+                ScrollBar.vertical: SlimScrollBar { theme: view.theme }
+
+                onCountChanged: {
+                    // 贴底跟随：直接设置 contentY，避免 positionViewAtEnd() 在大列表下的扫描开销
+                    if (autoScroll.checked && !rx.paused)
+                        Qt.callLater(function() {
+                            list.contentY = Math.max(0, list.contentHeight - list.height)
+                        })
+                }
+
+                delegate: Rectangle {
+                    id: row
+                    width: list.width
+                    height: theme.rowHeight
+                    color: rowHover.containsMouse ? theme.panelAlt
+                         : (isTx ? Qt.rgba(theme.tx.r, theme.tx.g, theme.tx.b, 0.06)
+                                 : (index % 2 ? Qt.rgba(1, 1, 1, 0.015) : "transparent"))
+
+                    MouseArea {
+                        id: rowHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        spacing: 0
+
+                        Text {
+                            width: view.wSeq
+                            text: sequence
+                            color: theme.textFaint
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wTime
+                            text: timeText
+                            color: theme.textDim
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wCh
+                            text: "CAN" + (channel + 1)
+                            color: theme.channelColor(channel)
+                            font.family: theme.monoFamily
+                            font.pixelSize: 11
+                            font.bold: true
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wDir
+                            text: isTx ? qsTr("发送") : qsTr("接收")
+                            color: isTx ? theme.tx : theme.rx
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            font.bold: true
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wId
+                            text: idText
+                            color: rowColor
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            font.bold: true
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wType
+                            text: typeText
+                            color: theme.textDim
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wFmt
+                            text: formatText
+                            color: isError ? theme.error : (isFd ? theme.accent : theme.textDim)
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: view.wDlc
+                            text: dlc
+                            color: theme.textDim
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                        Text {
+                            width: Math.max(80, list.width - view.usedWidth - 24)
+                            text: dataText
+                            color: isError ? theme.error : (isTx ? theme.rx : theme.text)
+                            font.family: theme.monoFamily
+                            font.pixelSize: theme.fontSize
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            height: parent.height
+                        }
+                    }
+                }
             }
 
-            delegate: Rectangle {
-                id: row
-                width: list.width
-                height: theme.rowHeight
-                color: rowHover.containsMouse ? theme.panelAlt
-                     : (isTx ? Qt.rgba(theme.tx.r, theme.tx.g, theme.tx.b, 0.06)
-                             : (index % 2 ? Qt.rgba(1, 1, 1, 0.015) : "transparent"))
-
-                MouseArea {
-                    id: rowHover
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    acceptedButtons: Qt.NoButton
-                }
-
-                Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    spacing: 0
-
-                    Text {
-                        width: view.wSeq
-                        text: sequence
-                        color: theme.textFaint
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wTime
-                        text: timeText
-                        color: theme.textDim
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wCh
-                        text: "CAN" + (channel + 1)
-                        color: theme.channelColor(channel)
-                        font.family: theme.monoFamily
-                        font.pixelSize: 11
-                        font.bold: true
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wDir
-                        text: isTx ? qsTr("发送") : qsTr("接收")
-                        color: isTx ? theme.tx : theme.rx
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        font.bold: true
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wId
-                        text: idText
-                        color: rowColor
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        font.bold: true
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wType
-                        text: typeText
-                        color: theme.textDim
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wFmt
-                        text: formatText
-                        color: isError ? theme.error : (isFd ? theme.accent : theme.textDim)
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: view.wDlc
-                        text: dlc
-                        color: theme.textDim
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                    Text {
-                        width: Math.max(80, list.width - view.usedWidth - 24)
-                        text: dataText
-                        color: isError ? theme.error : (isTx ? theme.rx : theme.text)
-                        font.family: theme.monoFamily
-                        font.pixelSize: theme.fontSize
-                        elide: Text.ElideRight
-                        verticalAlignment: Text.AlignVCenter
-                        height: parent.height
-                    }
-                }
+            // 空态占位：没有报文时不留一片纯黑
+            Text {
+                anchors.centerIn: parent
+                visible: list.count === 0
+                horizontalAlignment: Text.AlignHCenter
+                text: !rx.running ? qsTr("未开始接收\n请在左栏连接设备并应用配置")
+                                  : (rx.totalReceived > 0 ? qsTr("当前筛选条件下无匹配报文")
+                                                          : qsTr("等待报文…"))
+                color: theme.textFaint
+                font.pixelSize: 12
+                font.family: theme.sansFamily
             }
         }
 
