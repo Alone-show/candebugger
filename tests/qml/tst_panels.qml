@@ -122,6 +122,142 @@ TestCase {
         theme.destroy()
     }
 
+    // 回归：单帧面板的「快捷周期发送」默认状态（周期 100ms / 次数 1 次 / 离线不运行）
+    function test_sendPanelQuickPeriodicDefaults() {
+        var theme = makeTheme()
+        var c = loadPanel("SendPanel")
+        var panel = c.createObject(testCase, { "theme": theme })
+        verify(panel !== null, "SendPanel 实例化失败: " + c.errorString())
+
+        compare(panel.quickIntervalMs, 100, "快捷周期默认周期应为 100ms")
+        compare(panel.quickRepeat, 1, "快捷周期默认次数应为 1 次")
+        compare(panel.quickRunning(), false, "离线时快捷周期不应处于运行态")
+        verify(String(panel.statusText()).length > 0, "状态行应有文案")
+
+        panel.destroy()
+        theme.destroy()
+    }
+
+    // 次数留空/非法时按 1 次（与默认值一致），显式 0 才视为无限循环
+    function test_quickPeriodicRepeatFallback() {
+        var theme = makeTheme()
+        var c = loadPanel("SendPanel")
+        var panel = c.createObject(testCase, { "theme": theme })
+        verify(panel !== null, "SendPanel 实例化失败: " + c.errorString())
+
+        var field = findByName(panel, "quickRepeatField")
+        verify(field !== null, "找不到次数输入框")
+
+        field.text = ""
+        panel.startQuick()
+        compare(panel.quickRepeat, 1, "次数留空应回退为 1 次")
+
+        field.text = "abc"
+        panel.startQuick()
+        compare(panel.quickRepeat, 1, "次数非法应回退为 1 次")
+
+        field.text = "0"
+        panel.startQuick()
+        compare(panel.quickRepeat, 0, "次数 0 应表示无限循环")
+
+        panel.destroy()
+        theme.destroy()
+    }
+
+    // 回归：离线点「周期发送」必须被拒绝并给出原因，且不会把消息发给周期页签的通道状态
+    function test_quickPeriodicRequiresDevice() {
+        var theme = makeTheme()
+        var c = loadPanel("SendPanel")
+        var panel = c.createObject(testCase, { "theme": theme })
+        verify(panel !== null, "SendPanel 实例化失败: " + c.errorString())
+
+        var notices = []
+        periodicSender.quickOperationFinished.connect(function (p, ok, msg) {
+            notices.push({ "port": p, "ok": ok, "msg": String(msg) })
+        })
+
+        panel.startQuick()
+        compare(notices.length, 1, "离线启动应立刻回一条失败通知")
+        compare(notices[0].ok, false, "离线启动必须是失败")
+        verify(notices[0].msg.length > 0, "失败通知应带原因")
+        compare(panel.quickRunning(), false, "失败后不应处于运行态")
+        compare(String(panel.quickNotice), notices[0].msg, "面板状态行应展示失败原因")
+
+        panel.destroy()
+        theme.destroy()
+    }
+
+    // 回归：单帧面板必须完整塞进底部发送区（页签 38 + 单帧页签高度 215 -> 可用 177）；
+    // 本次改动的两行不得把面板既有最小宽度（第 1 行决定的 829）撑大
+    function test_sendPanelFitsBottomWorkspace() {
+        var theme = makeTheme()
+        var c = loadPanel("SendPanel")
+        // 默认窗口宽度 1440 - 左栏 286 = 1154
+        var panel = c.createObject(testCase, { "theme": theme, "width": 1154, "height": 177 })
+        verify(panel !== null, "SendPanel 实例化失败: " + c.errorString())
+
+        var row = findByName(panel, "sendRow")
+        var optionsRow = findByName(panel, "optionsRow")
+        var quickButton = findByName(panel, "quickSendButton")
+        var status = findByName(panel, "sendStatus")
+        verify(row !== null, "找不到数据+发送行")
+        verify(optionsRow !== null, "找不到选项行")
+        verify(quickButton !== null, "找不到周期发送按钮")
+        verify(status !== null, "找不到状态行")
+
+        var right = quickButton.x + quickButton.width
+        verify(right <= panel.width + 0.5,
+               "周期发送按钮超出面板宽度: " + right + " > " + panel.width)
+        // 面板既有最小宽度 829（第 1 行"帧参数"决定，与本次改动无关）；这两行不得更大
+        verify(row.implicitWidth <= 829,
+               "数据+发送行把面板最小宽度撑大了: " + row.implicitWidth + " > 829")
+        verify(optionsRow.implicitWidth <= 829,
+               "选项行把面板最小宽度撑大了: " + optionsRow.implicitWidth + " > 829")
+        verify(status.y + status.height <= panel.height + 0.5,
+               "状态行超出可视区: " + (status.y + status.height) + " > " + panel.height)
+
+        panel.destroy()
+        theme.destroy()
+    }
+
+    // 回归：底部发送区高度按页签区分（单帧页签收紧，周期/记录回放保持）
+    function test_sendWorkspaceHeightPerTab() {
+        var theme = makeTheme()
+        var c = loadPanel("SendWorkspace")
+        var ws = c.createObject(testCase, { "theme": theme, "width": 900, "height": 300 })
+        verify(ws !== null, "SendWorkspace 实例化失败: " + c.errorString())
+
+        ws.currentIndex = 0
+        compare(ws.panelHeight, 215, "单帧页签应收紧到 215")
+        ws.currentIndex = 1
+        compare(ws.panelHeight, 256, "周期页签应保持 256")
+        ws.currentIndex = 2
+        compare(ws.panelHeight, 256, "记录/回放页签应保持 256")
+
+        ws.destroy()
+        theme.destroy()
+    }
+
+    // 回归：单帧面板的 specMap 必须带上 ID 递增开关（新增开关最容易漏传）
+    function test_sendPanelSpecMapCarriesIdIncrement() {
+        var theme = makeTheme()
+        var c = loadPanel("SendPanel")
+        var panel = c.createObject(testCase, { "theme": theme })
+        verify(panel !== null, "SendPanel 实例化失败: " + c.errorString())
+
+        var box = findByName(panel, "idIncrCheck")
+        verify(box !== null, "找不到「ID 递增」勾选框")
+        compare(panel.specMap().incrementId, false, "默认不应勾选 ID 递增")
+
+        box.checked = true
+        compare(panel.specMap().incrementId, true, "勾选后 specMap 必须带 incrementId")
+        compare(panel.specMap().rolling, false, "不应顺带打开滚动计数")
+        compare(panel.specMap().increment, false, "不应顺带打开递增填充")
+
+        panel.destroy()
+        theme.destroy()
+    }
+
     // 按 objectName 递归查找（不依赖 QtTest 的 findChild 实现）
     function findByName(root, name) {
         if (!root || !root.children)

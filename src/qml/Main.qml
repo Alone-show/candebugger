@@ -380,9 +380,10 @@ ApplicationWindow {
             }
 
             SendWorkspace {
+                id: sendWorkspace
                 theme: theme
                 Layout.fillWidth: true
-                Layout.preferredHeight: 256
+                Layout.preferredHeight: sendWorkspace.panelHeight
             }
         }
     }

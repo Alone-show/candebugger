@@ -38,7 +38,7 @@
 - `src/qml/DevicePanel.qml` — 设备信息 + CAN1/CAN2 配置卡片 + 合并开关 + 一键启停 + 状态提示
 - `src/qml/ReceiveView.qml` — 工具栏 + 可折叠滤波区 + 序号列表 + 底部状态条
 - `src/qml/StatisticsPanel.qml` — 指标卡 + 负载仪表 + 趋势图(`RealtimePlot`) + 错误计数 + Top-N
-- `src/qml/SendPanel.qml` — 紧凑横向单帧发送（含"高级"折叠：数据生成/多帧列表）
+- `src/qml/SendPanel.qml` — 紧凑横向单帧发送（含「快捷周期发送」：把当前单帧按周期/次数反复发出）
 - `src/qml/PeriodicPanel.qml` — 紧凑定时发送表格
 - `src/qml/RecordPanel.qml` — 紧凑记录/回放
 - `resources.qrc` — 注册新增组件与图标
@@ -74,7 +74,8 @@
 - 功能回归：离线可正常渲染；设备在线时暂停/清空/滤波/搜索/发送/记录/回放行为与旧版一致
 
 ## 8. 风险与注意
-- 底部发送区高度有限：原 `SendPanel` 偏长，需"基础表单常显 + 高级折叠"避免挤压；多帧列表放入折叠/内部滚动
+- 底部发送区高度有限：原 `SendPanel` 偏长，需"基础表单常显 + 折叠"避免挤压；
+  现改为常显的「快捷周期发送」一行（周期/次数/启停），多帧列表已移除（见 `PROGRESS.md` 步骤 16）
 - QML 组件作用域：沿用 `property var theme` 逐层传递，避免引入 qmldir 单例带来的测试/资源路径风险
 - 图标以内联 SVG 入 qrc，避免字体图标依赖
 - 不改变接收路径逐帧信号与合并刷新机制，避免性能回退

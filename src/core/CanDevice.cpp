@@ -479,20 +479,34 @@ bool CanDevice::clearSendQueue(quint32 port)
 
 bool CanDevice::transmitCan(quint32 port, const ZCAN_20_MSG &msg)
 {
-    std::lock_guard<std::mutex> io(m_ioMutex);
-    if (!m_open.load())
-        return false;
-    ZCAN_20_MSG frame = msg;
-    return VCI_Transmit(DeviceType, m_card, port, &frame, 1) == 1;
+    ZCAN_20_MSG frame = msg;   // SDK 接口非 const，且不假定其不修改入参
+    return transmitBatchCan(port, &frame, 1) == 1;
 }
 
 bool CanDevice::transmitFd(quint32 port, const ZCAN_FD_MSG &msg)
 {
+    ZCAN_FD_MSG frame = msg;
+    return transmitBatchFd(port, &frame, 1) == 1;
+}
+
+int CanDevice::transmitBatchCan(quint32 port, ZCAN_20_MSG *msgs, quint32 count)
+{
+    if (!msgs || count == 0)
+        return -1;
     std::lock_guard<std::mutex> io(m_ioMutex);
     if (!m_open.load())
-        return false;
-    ZCAN_FD_MSG frame = msg;
-    return VCI_TransmitFD(DeviceType, m_card, port, &frame, 1) == 1;
+        return -1;
+    return static_cast<int>(VCI_Transmit(DeviceType, m_card, port, msgs, count));
+}
+
+int CanDevice::transmitBatchFd(quint32 port, ZCAN_FD_MSG *msgs, quint32 count)
+{
+    if (!msgs || count == 0)
+        return -1;
+    std::lock_guard<std::mutex> io(m_ioMutex);
+    if (!m_open.load())
+        return -1;
+    return static_cast<int>(VCI_TransmitFD(DeviceType, m_card, port, msgs, count));
 }
 
 int CanDevice::receiveCan(quint32 port, ZCAN_20_MSG *buf, quint32 count, quint32 timeoutMs)

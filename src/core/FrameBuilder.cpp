@@ -127,6 +127,15 @@ quint32 FrameBuilder::clampId(quint32 id, bool extended)
     return extended ? (id & 0x1FFFFFFFu) : (id & 0x7FFu);
 }
 
+quint32 FrameBuilder::idForCounter(quint32 baseId, bool extended, bool incrementId, quint32 counter)
+{
+    const quint32 mask = extended ? 0x1FFFFFFFu : 0x7FFu;
+    const quint32 base = baseId & mask;
+    if (!incrementId)
+        return base;
+    return (base + counter) & mask;   // 超出位宽即回绕
+}
+
 quint8 FrameBuilder::crc8(const QByteArray &data)
 {
     quint8 crc = 0;
@@ -188,6 +197,7 @@ bool FrameBuilder::specFromMap(const QVariantMap &map, FrameSpec *spec, QString 
     s.crc = map.value(QStringLiteral("crc"), false).toBool();
     s.rolling = map.value(QStringLiteral("rolling"), false).toBool();
     s.increment = map.value(QStringLiteral("increment"), false).toBool();
+    s.incrementId = map.value(QStringLiteral("incrementId"), false).toBool();
     s.counter = map.value(QStringLiteral("counter"), 0).toUInt();
 
     const int maxLen = maxLenFor(s);
@@ -220,6 +230,7 @@ QVariantMap FrameBuilder::specToMap(const FrameSpec &spec, int dataFormat)
     map.insert(QStringLiteral("crc"), spec.crc);
     map.insert(QStringLiteral("rolling"), spec.rolling);
     map.insert(QStringLiteral("increment"), spec.increment);
+    map.insert(QStringLiteral("incrementId"), spec.incrementId);
     map.insert(QStringLiteral("dataFormat"), dataFormat);
     map.insert(QStringLiteral("data"), formatData(spec.data, dataFormat));
     return map;
@@ -371,6 +382,8 @@ bool FrameBuilder::sendFrame(int port, const QVariantMap &specMap)
         return false;
     }
     spec.counter = m_counter;
+    // ID 递增：把计数器叠加到基址上（后续 build/记录统一用 spec.id）
+    spec.id = idForCounter(spec.id, spec.extended, spec.incrementId, spec.counter);
 
     bool ok = false;
     if (spec.fd) {
@@ -389,7 +402,8 @@ bool FrameBuilder::sendFrame(int port, const QVariantMap &specMap)
         ok = m_device && m_device->transmitCan(static_cast<quint32>(port), msg);
     }
 
-    if (spec.rolling)
+    // 滚动计数与 ID 递增共用同一个计数器，二者任一勾选都要推进
+    if (spec.rolling || spec.incrementId)
         ++m_counter;
 
     if (ok) {
@@ -447,6 +461,8 @@ bool FrameBuilder::enqueueOne(int port, const QVariantMap &specMap)
         return false;
     }
     spec.counter = m_counter;
+    // ID 递增：构建前先叠加到基址，保证下发帧与记录帧的 ID 一致
+    spec.id = idForCounter(spec.id, spec.extended, spec.incrementId, spec.counter);
 
     ZCAN_20_MSG can;
     ZCAN_FD_MSG fdf;
@@ -463,7 +479,8 @@ bool FrameBuilder::enqueueOne(int port, const QVariantMap &specMap)
             return false;
         }
     }
-    if (spec.rolling)
+    // 滚动计数与 ID 递增共用同一个计数器，二者任一勾选都要推进
+    if (spec.rolling || spec.incrementId)
         ++m_counter;
 
     const QString desc = describe(specMap);

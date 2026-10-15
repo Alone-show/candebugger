@@ -169,6 +169,49 @@ private slots:
         QCOMPARE(m.dat[3], expect);
     }
 
+    // ID 递增：勾选时 ID = 基址 + 计数器，不勾选等价于 clampId
+    void idIncrement()
+    {
+        // 未勾选：与 clampId 一致（计数器不参与）
+        QCOMPARE(FrameBuilder::idForCounter(0x123, false, false, 5), quint32(0x123));
+        QCOMPARE(FrameBuilder::idForCounter(0x1ABCDEF0, true, false, 5), quint32(0x1ABCDEF0));
+
+        // 标准帧：基址 + 计数器；超出 0x7FF 回绕
+        QCOMPARE(FrameBuilder::idForCounter(0x123, false, true, 0), quint32(0x123));
+        QCOMPARE(FrameBuilder::idForCounter(0x123, false, true, 2), quint32(0x125));
+        QCOMPARE(FrameBuilder::idForCounter(0x7FE, false, true, 1), quint32(0x7FF));
+        QCOMPARE(FrameBuilder::idForCounter(0x7FF, false, true, 1), quint32(0x000));
+        QCOMPARE(FrameBuilder::idForCounter(0x7FE, false, true, 4), quint32(0x002));
+
+        // 扩展帧：按 29 位回绕；基址先按位宽掩码（未扩展开关时按标准帧算的语义由调用方决定）
+        QCOMPARE(FrameBuilder::idForCounter(0x1FFFFFFE, true, true, 3), quint32(0x1));
+        QCOMPARE(FrameBuilder::idForCounter(1u << 29, true, true, 0), quint32(0));
+    }
+
+    // ID 递增同样进入构建结果与 specToMap/specFromMap
+    void idIncrementBuildCan()
+    {
+        FrameSpec s;
+        s.id = 0x100;
+        s.dlc = 1;
+        s.incrementId = true;
+        s.counter = 3;
+        ZCAN_20_MSG m;
+        QVERIFY(FrameBuilder::buildCan(s, &m));
+        // buildCan 只做 clampId；递增由发送路径在构建前写入 spec.id
+        QCOMPARE(m.hdr.id, quint32(0x100));
+
+        s.id = FrameBuilder::idForCounter(s.id, s.extended, s.incrementId, s.counter);
+        QVERIFY(FrameBuilder::buildCan(s, &m));
+        QCOMPARE(m.hdr.id, quint32(0x103));
+
+        const QVariantMap map = FrameBuilder::specToMap(s, FrameBuilder::HexFormat);
+        QCOMPARE(map.value(QStringLiteral("incrementId")).toBool(), true);
+        FrameSpec back;
+        QVERIFY(FrameBuilder::specFromMap(map, &back));
+        QVERIFY(back.incrementId);
+    }
+
     void specFromMapAndDescribe()
     {
         QVariantMap map;
@@ -318,6 +361,7 @@ private slots:
         QCOMPARE(back.fd, s.fd);
         QCOMPARE(back.dlc, s.dlc);
         QCOMPARE(back.data, s.data);
+        QCOMPARE(back.incrementId, s.incrementId);
     }
 
     // 异步发送：立即返回（入队），完成后经 sendCompleted 回传；未打开设备 → 失败且不计数

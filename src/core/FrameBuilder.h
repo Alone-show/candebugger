@@ -34,8 +34,9 @@ struct FrameSpec
     bool crc = false;        // 末字节写入 CRC-8（对前 n-1 字节）
     bool rolling = false;    // 首字节写入滚动计数
     bool increment = false;  // 逐字节递增填充
+    bool incrementId = false; // ID 递增：ID = 基址 + 计数器（按标准/扩展帧位宽回绕）
 
-    quint32 counter = 0;     // 滚动计数当前值（由发送方维护）
+    quint32 counter = 0;     // 滚动计数/ID 递增当前值（由发送方维护）
 };
 
 // CAN 帧构建与批量发送。纯逻辑部分为静态方法，便于单测（无需设备）。
@@ -57,6 +58,10 @@ public:
     static QByteArray parseData(const QString &text, int format, int maxBytes, QString *error = nullptr);
     static QString formatData(const QByteArray &data, int format);
     static quint32 clampId(quint32 id, bool extended);
+
+    // 应用「ID 递增」：incrementId 为假时等价于 clampId(baseId)（不递增）；
+    // 为真时返回 (基址 + 计数器) 并按位宽回绕（标准 0x7FF / 扩展 0x1FFFFFFF）。
+    static quint32 idForCounter(quint32 baseId, bool extended, bool incrementId, quint32 counter);
 
     static quint8 crc8(const QByteArray &data);
 

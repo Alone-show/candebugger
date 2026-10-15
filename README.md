@@ -20,10 +20,13 @@
 
 ### 里程碑 2
 - 单帧发送：标准/扩展、CAN2.0/CANFD、数据/远程、BRS、DLC（0–8 / FD 0–64）
-- 数据编辑 Hex/ASCII/十进制；数据生成 CRC-8 / 滚动计数 / 递增填充
-- 发送模式（正常/单次/自发自收/自发自收单次）+ 回显；多帧列表批量发送
+- 数据编辑 Hex/ASCII/十进制；数据生成 CRC-8 / 滚动计数 / 递增填充 / ID 递增
+- 发送模式（正常/单次/自发自收/自发自收单次）+ 回显；**快捷周期发送**（把当前单帧按
+  周期(ms)/次数(默认 1；0=循环)反复发出，控件就在「发送」同一行；独立于周期页签的配置表，
+  互不干扰；数据生成随之逐帧生效）
 - 周期发送：软件定时（PC 侧精确定时线程），**条数不限**，周期(ms)、次数(0=循环)；
-  两通道以内联标签页分别配置与独立启停
+  两通道以内联标签页分别配置与独立启停；同一 tick 到期的帧按 CAN / CAN-FD 分组合并为
+  一次 USB 调用提交（每批最多 2 次调用），避免逐帧一次 USB 往返把表内相邻帧拉开
 
 ### 里程碑 3
 - 软件滤波（显示层，即时生效）：ID 单值/范围、方向（全部/仅收/仅发）、
@@ -131,8 +134,8 @@ ui/CanDebugger/
 │          test_recorder, test_replayer, test_filter_proxy, test_framelist_roles,
 │          test_ring_concurrency；QML：qml/tst_{qml.cpp,panels,runtime}；
 │          实机：device_smoke, test_rx_pipeline, device_send_test,
-│          device_filter_test, device_merge_test, device_multichannel_test,
-│          device_replay_test, device_stress_test
+│          device_periodic_test, device_filter_test, device_merge_test,
+│          device_multichannel_test, device_replay_test, device_stress_test
 │          工具：device_baud_scan/device_bitrate_scan/device_calibrate
 ├─ scripts/ run_all_tests.sh, run_hw_tests.sh
 ├─ TEST_PLAN.md
@@ -195,6 +198,7 @@ scripts/run_hw_tests.sh
 ./build/device_smoke              # 设备打开/配置/自发自收
 ./build/test_rx_pipeline          # 设备→线程→环形缓冲→模型 全链路
 ./build/device_send_test          # 单帧发送 + 软件定时发送
+./build/device_periodic_test      # 周期表批量提交：同 tick 相邻帧总线级间隔（[条数] [周期ms] [运行ms]）
 ./build/device_filter_test        # 硬件验收滤波 + 软件模型滤波 + 统计联动
 ./build/device_merge_test         # 合并接收模式
 ./build/device_multichannel_test  # 双通道并发收发
@@ -226,8 +230,9 @@ scripts/run_hw_tests.sh
 
 ## 发送说明
 - 帧字段由 `FrameBuilder` 构建，DLC 为准（数据不足补零、超出截断）；远程帧不带数据。
-- 数据生成：CRC-8（poly 0x07，写末字节）、滚动计数（写首字节）、递增填充（从 0 起），
-  为本地约定，跨节点使用需与对端统一。
+- 数据生成：CRC-8（poly 0x07，写末字节）、滚动计数（写首字节）、递增填充（数据从 0 起）、
+  ID 递增（ID = 基址 + 计数器，标准帧按 0x7FF / 扩展帧按 0x1FFFFFFF 回绕；与滚动计数共用
+  同一计数器，二者任一勾选即逐帧 +1），为本地约定，跨节点使用需与对端统一。
 - 定时发送为**软件实现**：`PeriodicSender` 用单调时钟调度 + 独立发送线程，经
   `transmitCan`/`transmitFd` 逐帧发出（不再使用硬件定时表 `CMD_CAN_TTX`），因此条数不限；
   周期最小 1ms（UI 以 ms 输入）；落后超过一个周期时丢弃落后时隙并重新对齐，不突发补发。

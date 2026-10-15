@@ -80,7 +80,7 @@ L7 人工验收       部署、热插拔、外部节点互操作
 |---|---|
 | `device_smoke` | 打开/信息/通道/自发自收 |
 | `test_rx_pipeline` | 设备→线程→环形缓冲→模型 全链路 |
-| `device_send_test` | 单帧 CAN/FD + 软件定时发送（`PeriodicSender`）+ 单条启停 |
+| `device_send_test` | 单帧 CAN/FD + 软件定时发送（`PeriodicSender`）+ 单条启停 + 快捷槽（`startQuick/stopQuick`）+ 滚动计数/ID 递增逐帧推进 |
 | `device_filter_test` | 硬件验收滤波 + 软件模型滤波 + 统计联动 |
 | `device_merge_test` | **新增**：合并接收 `VCI_ReceiveData` 全链路 + 取消合并恢复 |
 | `device_multichannel_test` | **新增**：双通道并发收发与通道归属 |
@@ -190,11 +190,23 @@ view/RealtimePlot.cpp           20.0%
    导致 `RingBuffer` 在 `m_head/m_count` 上被误报数据竞争。
    已将 `RingBuffer` 改用 `std::mutex`（语义等价、TSan 可追踪）；
    改后 TSan 由 254s + 55 警告变为 **0.16s + 0 警告**。其余模块仍用 `QMutex`。
-2. **周期发送吞吐与精度（步骤 14 改版后待实测）**：定时发送改为 PC 侧精确定时线程
-   （`steady_clock` + 独立发送线程），不再受固件 8 条限制。真实总线上的周期精度、`>8 条`
-   并发发送、以及 `VCI_Transmit` 偶发阻塞下的队列行为**尚未实机复测**。
-   旧硬件路径（8 条 `CMD_CAN_TTX`）2–10ms 区间实测吞吐 ~1000–1300 fps，可作为设备/总线
-   上限的量级参考。
+   **同类新增（步骤 15 定位，待处理）**：`PeriodicSender` 用
+   `QMetaObject::invokeMethod(obj, lambda, Qt::QueuedConnection)` 跨线程回投通知时，
+   TSan 会偶发报 1–2 条数据竞争（约 40% 的运行），raced 内存是 Qt 的 functor 载荷
+   （`qobjectdefs_impl.h`）。用最小复现程序确认：**只做该跨线程回投就会报，15/15 次复现**，
+   与业务逻辑无关 —— 根因同上（`libQt5Core` 未插桩，事件队列的 happens-before 不可见）。
+   处置选项：加 TSan suppressions 文件，或把回投改为 GUI 线程定时器轮询。
+   ⚠️ 因此步骤 14 记录的「TSan 0 警告」是**不稳定的历史采集结果**，复测会复现上述告警。
+2. **周期发送吞吐与精度（步骤 15 已实机复测）**：定时发送为 PC 侧精确定时线程
+   （`steady_clock` + 独立发送线程），不受固件 8 条限制。
+   - 100ms 周期精度：实机 tick 周期中位 **100.00ms**（配置 100ms）
+   - **表内相邻帧间隔（本次修复项）**：10 条 × 100ms 时，改造前逐帧 `VCI_Transmit`
+     为 **0.700ms/帧**（最好 0.6、最差 0.8），合批后 **0.300ms/帧**（0.2–0.4，已到 500k 经典
+     8 字节帧的总线极限）。详见 `PROGRESS.md` 步骤 15 与 `./build/device_periodic_test`
+   - 吞吐：8 条 @5ms 压力 **3402 fps、丢弃 0**（逐帧路径受 USB 往返限制约 1000–1300 fps）
+   - **超时语义**：一批帧的失败等待只按**一次** `txTimeout` 计，与批内帧数无关
+     （无 ACK 总线：逐帧 204ms vs 一次调用 20.5ms）
+   - 仍未覆盖：`VCI_Transmit` 偶发数秒阻塞下的队列行为（风险 27/29）
 3. **`VCI_Transmit` 并发阻塞（风险 27 复现）**：实机发送偶发阻塞数秒（`device_send_test`
    端到端 ~14–53s），属已知问题，非本次测试引入。
 
@@ -202,10 +214,13 @@ view/RealtimePlot.cpp           20.0%
 
 ## 9. 退出准则与遗留项
 
-**已满足**：L1–L4 全绿 + 无 sanitizer 报告 + 静态分析无错误。
+**已满足**：L1–L4 全绿 + ASan 无报告 + 静态分析无错误。
+（TSan 存在一类已知的 Qt 跨线程事件投递假阳性，见 §8.1，不影响验收判据。）
 
 **遗留 / 阻塞项（明确标注，不阻塞第一版验收）**：
 - ❗ **外部节点互操作性**（最高优先级风险 1）：无硬件，未验证标准公式 500k/2M 与第三方节点互通
+- ❗ **快捷周期发送的真机复测**（步骤 16 新增）：`device_send_test` 已扩展「快捷槽 + 滚动计数逐帧递增 +
+  与周期表互不干扰」三项用例，**尚未在实机运行**（离线单测 `test_periodicsender` 已覆盖同逻辑）
 - ⚠️ `VCI_Transmit` 在接收并发时阻塞 → `FrameBuilder` 仍在 GUI 线程同步发送（风险 27）
 - ⚠️ 回放发送不计入 `Statistics.txCount` 与记录（风险 17/23）；软件定时发送自步骤 14 起已计入
 - ⚠️ `hdr.ts` 设备时间戳单位未确认（风险 5）

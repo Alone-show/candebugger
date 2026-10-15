@@ -16,6 +16,7 @@ TextField {
     font.family: (mono && theme) ? theme.monoFamily : (theme ? theme.sansFamily : "sans-serif")
     leftPadding: 8
     rightPadding: 8
+    opacity: enabled ? 1.0 : 0.4   // 禁用态（如周期发送运行中锁定周期/次数）
 
     background: Rectangle {
         radius: control.theme ? control.theme.radiusSm : 5

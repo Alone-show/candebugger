@@ -526,6 +526,119 @@ int runDiagControl(int iters)
     return 0;
 }
 
+// 批量发送探针：确认 VCI_Transmit/VCI_TransmitFD 的 count>1 语义与收益。
+// 关注点：
+//   1) 返回值语义（成功时返回 count 还是 1）
+//   2) 逐帧 10 次单帧调用 vs 一次 10 帧批量调用的耗时
+//   3) 无 ACK 总线上的最坏阻塞（是否 1×txTimeout 还是 N×txTimeout）
+//   4) 设备发送队列容量与批量调用后的剩余空间
+int runDiagBatch(int iters, int txm)
+{
+    Harness h;
+    if (!h.load()) {
+        std::fprintf(stderr, "ERROR: 无法加载 Main.qml\n");
+        return 2;
+    }
+
+    CanDevice *dev = h.device;
+    if (!dev->openDevice(0)) {
+        std::fprintf(stderr, "ERROR: 打开设备失败\n");
+        return 3;
+    }
+    for (int ch = 0; ch < 2; ++ch) {
+        dev->configureChannel(ch, 500000, 2000000, 87.5, false);
+        dev->setTerminalResistor(ch, ch == 0);
+        dev->startChannel(ch);
+    }
+
+    const int N = 10;
+    std::printf("DIAG|mode        | txm=%d (%s)\n", txm,
+                txm == ZCAN_TX_NORM     ? "正常模式，等 ACK"
+                : txm == ZCAN_TX_ONCE   ? "单次发送，等 ACK"
+                : txm == ZCAN_SR_NORM   ? "自发自收"
+                                        : "单次+自发自收");
+    ZCAN_20_MSG can[N];
+    ZCAN_FD_MSG fdf[N];
+    for (int i = 0; i < N; ++i) {
+        std::memset(&can[i], 0, sizeof(ZCAN_20_MSG));
+        can[i].hdr.id = 0x300u + static_cast<quint32>(i);
+        can[i].hdr.chn = 0;
+        can[i].hdr.len = 8;
+        can[i].hdr.inf.txm = static_cast<quint8>(txm);
+        can[i].hdr.inf.echo = 1;
+        for (int b = 0; b < 8; ++b)
+            can[i].dat[b] = static_cast<quint8>(b);
+
+        std::memset(&fdf[i], 0, sizeof(ZCAN_FD_MSG));
+        fdf[i].hdr.id = 0x400u + static_cast<quint32>(i);
+        fdf[i].hdr.chn = 0;
+        fdf[i].hdr.len = 12;
+        fdf[i].hdr.inf.txm = static_cast<quint8>(txm);
+        fdf[i].hdr.inf.fmt = 1;   // CANFD
+        fdf[i].hdr.inf.brs = 1;   // 加速
+        fdf[i].hdr.inf.echo = 1;
+        for (int b = 0; b < 12; ++b)
+            fdf[i].dat[b] = static_cast<quint8>(b);
+    }
+
+    quint32 qsize = 0;
+    quint32 qspace = 0;
+    const bool okSize = dev->getSendQueueSize(0, &qsize);
+    const bool okSpace = dev->getSendQueueSpace(0, &qspace);
+    std::printf("DIAG|queue       | size=%u(ok=%d) space=%u(ok=%d)\n", qsize, okSize ? 1 : 0, qspace,
+                okSpace ? 1 : 0);
+
+    QElapsedTimer t;
+    auto report = [](const char *what, int ret, int want, qint64 us) {
+        std::printf("DIAG|%-12s| ret=%3d/%d  total=%8.2f ms  per-frame=%7.2f ms\n", what, ret, want,
+                    us / 1000.0, us / 1000.0 / qMax(1, want));
+        std::fflush(stdout);
+    };
+
+    // A. 逐帧：N 次单帧调用（当前实现的做法）
+    int singleOk = 0;
+    t.start();
+    for (int i = 0; i < N; ++i) {
+        if (dev->transmitCan(0, can[i]))
+            ++singleOk;
+    }
+    report("single-can", singleOk, N, t.nsecsElapsed() / 1000);
+
+    // B. 批量：一次调用 N 帧
+    for (int it = 0; it < qMax(1, iters); ++it) {
+        t.restart();
+        const int ret = dev->transmitBatchCan(0, can, static_cast<quint32>(N));
+        report("batch-can", ret, N, t.nsecsElapsed() / 1000);
+    }
+
+    // C. FD：逐帧 vs 批量
+    int singleFdOk = 0;
+    t.start();
+    for (int i = 0; i < N; ++i) {
+        if (dev->transmitFd(0, fdf[i]))
+            ++singleFdOk;
+    }
+    report("single-fd", singleFdOk, N, t.nsecsElapsed() / 1000);
+
+    for (int it = 0; it < qMax(1, iters); ++it) {
+        t.restart();
+        const int ret = dev->transmitBatchFd(0, fdf, static_cast<quint32>(N));
+        report("batch-fd", ret, N, t.nsecsElapsed() / 1000);
+    }
+
+    // D. 超出设备队列容量的一次调用（探测是否返回短计数）
+    const int bigN = 256;
+    QVector<ZCAN_20_MSG> big(bigN);
+    for (int i = 0; i < bigN; ++i)
+        big[i] = can[i % N];
+    t.restart();
+    const int bigRet = dev->transmitBatchCan(0, big.data(), static_cast<quint32>(bigN));
+    report("batch-256", bigRet, bigN, t.nsecsElapsed() / 1000);
+
+    dev->close();
+    return 0;
+}
+
 // 直接点击真实的「添加」+「启动」周期发送按钮，分别测量 RX 关闭 / RX 运行时的阻塞
 int runDiagPeriodicStart()
 {
@@ -769,6 +882,7 @@ int main(int argc, char *argv[])
     int settleMs = 150;
     int observeMs = 250;
     int iters = 20;
+    int txm = ZCAN_TX_NORM;
     bool child = false;
     bool openDevice = false;
     bool listOnly = false;
@@ -777,6 +891,7 @@ int main(int argc, char *argv[])
     bool diagControl = false;
     bool diagPeriodic = false;
     bool diagSend = false;
+    bool diagBatch = false;
 
     for (int i = 0; i < args.size(); ++i) {
         const QString a = args.at(i);
@@ -794,6 +909,8 @@ int main(int argc, char *argv[])
             diagPeriodic = true;
         else if (a == QLatin1String("--diag-send"))
             diagSend = true;
+        else if (a == QLatin1String("--diag-batch"))
+            diagBatch = true;
         else if (a == QLatin1String("--open-device"))
             openDevice = true;
         else if (a == QLatin1String("--index"))
@@ -808,12 +925,16 @@ int main(int argc, char *argv[])
             observeMs = args.value(i + 1).toInt();
         else if (a == QLatin1String("--iters"))
             iters = qMax(1, args.value(i + 1).toInt());
+        else if (a == QLatin1String("--txm"))
+            txm = args.value(i + 1).toInt();
     }
 
     if (diagControl)
         return runDiagControl(iters);
     if (diagPeriodic)
         return runDiagPeriodicStart();
+    if (diagBatch)
+        return runDiagBatch(iters, txm);
     if (diagSend)
         return runDiagSend();
     if (diagConnect)

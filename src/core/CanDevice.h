@@ -118,6 +118,13 @@ public:
     bool transmitCan(quint32 port, const ZCAN_20_MSG &msg);
     bool transmitFd(quint32 port, const ZCAN_FD_MSG &msg);
 
+    // 批量发送：一次 USB 调用提交多帧，由设备在总线上背靠背发出。
+    // 逐帧调用时每帧都要一次 USB 往返（实测 ~1ms/帧），批量把这段开销摊到整批上。
+    // 返回驱动实际提交的帧数（可能 < count，即部分提交）；-1 表示参数非法或设备未打开。
+    // msgs 内容会被复制/交给驱动，调用返回后即可复用。
+    int transmitBatchCan(quint32 port, ZCAN_20_MSG *msgs, quint32 count);
+    int transmitBatchFd(quint32 port, ZCAN_FD_MSG *msgs, quint32 count);
+
     // 接收：短超时轮询，供接收线程调用（内部加锁，持锁时间受 timeoutMs 限制）
     int receiveCan(quint32 port, ZCAN_20_MSG *buf, quint32 count, quint32 timeoutMs = 5);
     int receiveFd(quint32 port, ZCAN_FD_MSG *buf, quint32 count, quint32 timeoutMs = 5);

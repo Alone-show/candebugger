@@ -8,6 +8,10 @@ Rectangle {
     property var theme
     property int currentIndex: 0
 
+    // 底部发送区高度：单帧页签只有三行表单 + 状态行，收紧后把空间让给接收列表；
+    // 周期/记录回放页签要放表格，保持原高度。
+    readonly property int panelHeight: currentIndex === 0 ? 215 : 256
+
     color: theme.panel
 
     Rectangle {

@@ -7,7 +7,6 @@ Rectangle {
     id: panel
     property var theme
     property int port: 0
-    property bool advanced: false
 
     property var canDlc: [0, 1, 2, 3, 4, 5, 6, 7, 8]
     property var fdDlc: [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64]
@@ -16,7 +15,23 @@ Rectangle {
     property int dataFormat: 0
     property int dlcValue: 8
 
+    // 快捷周期发送：记录"本次启动"用的周期/次数（运行中改输入框不生效）
+    property double quickIntervalMs: 100
+    property int quickRepeat: 1
+
+    // 状态行：多来源提示（优先级见 statusText()）
+    property string quickNotice: ""
+    property string busyNotice: ""
+    property color busyNoticeColor: theme ? theme.textDim : "#94a3b8"
+    property color quickNoticeColor: theme ? theme.textDim : "#94a3b8"
+
     color: theme.bg
+
+    // 换通道后清掉上一条提示，避免把别的通道的消息显示在当前通道下
+    onPortChanged: {
+        panel.quickNotice = ""
+        panel.busyNotice = ""
+    }
 
     function maxBytes() { return fdCheck.checked ? 64 : 8 }
     function currentDlc() { return panel.dlcValue }
@@ -63,89 +78,109 @@ Rectangle {
             "echo": echoCheck.checked,
             "crc": crcCheck.checked,
             "rolling": rollingCheck.checked,
-            "increment": incrCheck.checked
+            "increment": incrCheck.checked,
+            "incrementId": idIncrCheck.checked
         }
     }
 
     function doSend() {
         var spec = panel.specMap()
+        panel.quickNotice = ""
         if (!frameBuilder.sendFrameAsync(panel.port, spec)) {
-            status.color = theme.error
-            status.text = qsTr("发送失败: ") + frameBuilder.lastError
+            panel.busyNoticeColor = theme.error
+            panel.busyNotice = qsTr("发送失败: ") + frameBuilder.lastError
             return
         }
-        status.color = theme.textDim
-        status.text = qsTr("发送中…")
+        panel.busyNoticeColor = theme.textDim
+        panel.busyNotice = qsTr("发送中…")
     }
 
-    function addToList() {
-        var spec = panel.specMap()
-        listModel.append({
-            "idv": spec.id,
-            "extended": spec.extended,
-            "fd": spec.fd,
-            "remote": spec.remote,
-            "brs": spec.brs,
-            "dlc": spec.dlc,
-            "data": spec.data,
-            "dataFormat": spec.dataFormat,
-            "txm": spec.txm,
-            "echo": spec.echo,
-            "crc": spec.crc,
-            "rolling": spec.rolling,
-            "increment": spec.increment,
-            "desc": frameBuilder.describe(spec)
-        })
-    }
+    // ---------------- 快捷周期发送（独立于「周期发送」页签的配置表） ----------------
 
-    function batchList(list) {
-        var arr = []
-        for (var i = 0; i < list.length; ++i) {
-            var r = list[i]
-            arr.push({
-                "id": r.idv, "extended": r.extended, "fd": r.fd, "remote": r.remote,
-                "brs": r.brs, "dlc": r.dlc, "data": r.data, "dataFormat": r.dataFormat,
-                "txm": r.txm, "echo": r.echo, "crc": r.crc, "rolling": r.rolling,
-                "increment": r.increment
-            })
+    function quickState() {
+        var s = periodicSender.quickStates
+        for (var i = 0; s && i < s.length; ++i) {
+            if (s[i].port === panel.port)
+                return s[i]
         }
-        return arr
+        return null
     }
 
-    function sendAll() {
-        var arr = panel.batchList(listModel)
-        var n = frameBuilder.sendBatchAsync(panel.port, arr)
-        status.color = theme.textDim
-        status.text = qsTr("已加入发送队列 %1/%2 帧").arg(n).arg(arr.length)
+    function quickRunning() {
+        var st = panel.quickState()
+        return st ? st.active : false
     }
 
-    function sendSelected() {
-        if (listView.currentIndex < 0) {
-            status.color = theme.error
-            status.text = qsTr("请先选中列表中的一帧")
-            return
+    function startQuick() {
+        var ms = parseFloat(quickIntervalField.text)
+        if (!(ms > 0))
+            ms = 100
+        // 次数留空/非法 -> 1 次（与输入框默认值一致）；显式 0 -> 无限循环
+        var rep = parseInt(quickRepeatField.text, 10)
+        if (!(rep >= 0))
+            rep = 1
+        panel.quickIntervalMs = ms
+        panel.quickRepeat = rep
+        panel.quickNotice = ""
+        panel.busyNotice = ""
+        // 失败原因经 quickOperationFinished 回传
+        periodicSender.startQuick(panel.port, panel.specMap(), ms, rep)
+    }
+
+    function stopQuick() {
+        panel.quickNotice = ""
+        panel.busyNotice = ""
+        periodicSender.stopQuick(panel.port)
+    }
+
+    function statusText() {
+        var st = panel.quickState()
+        if (st && st.active) {
+            return qsTr("快捷周期发送中：通道 %1 · %2ms · %3")
+                    .arg(panel.port)
+                    .arg(panel.quickIntervalMs)
+                    .arg(panel.quickRepeat > 0 ? qsTr("共 %1 次").arg(panel.quickRepeat)
+                                               : qsTr("循环"))
         }
-        var r = listModel.get(listView.currentIndex)
-        var arr = panel.batchList([r])
-        var n = frameBuilder.sendBatchAsync(panel.port, arr)
-        status.color = theme.textDim
-        status.text = qsTr("已加入发送队列 %1/1 帧").arg(n)
+        if (panel.quickNotice !== "")
+            return panel.quickNotice
+        if (panel.busyNotice !== "")
+            return panel.busyNotice
+        return canDevice.open ? qsTr("就绪") : qsTr("请先连接设备")
+    }
+
+    function statusColor() {
+        if (panel.quickNotice !== "")
+            return panel.quickNoticeColor
+        if (panel.busyNotice !== "")
+            return panel.busyNoticeColor
+        return theme.textDim
     }
 
     Connections {
         target: frameBuilder
         function onSendCompleted(ok, description, error) {
+            panel.quickNotice = ""   // 最新事件拥有状态行，避免旧通知掩盖发送结果
             if (ok) {
-                status.color = theme.rx
-                status.text = qsTr("已发送: ") + description
+                panel.busyNoticeColor = theme.rx
+                panel.busyNotice = qsTr("已发送: ") + description
             } else {
-                status.color = theme.error
-                status.text = qsTr("发送失败: ") + error
+                panel.busyNoticeColor = theme.error
+                panel.busyNotice = qsTr("发送失败: ") + error
             }
         }
     }
 
-    ListModel { id: listModel }
+    Connections {
+        target: periodicSender
+        function onQuickOperationFinished(p, ok, message) {
+            if (p !== panel.port)
+                return
+            panel.busyNotice = ""   // 同上：快捷周期的结果优先展示
+            panel.quickNoticeColor = ok ? theme.textDim : theme.error
+            panel.quickNotice = message
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -218,6 +253,7 @@ Rectangle {
 
         // ---------------- 数据 + 发送 ----------------
         RowLayout {
+            objectName: "sendRow"
             Layout.fillWidth: true
             spacing: 8
 
@@ -227,6 +263,8 @@ Rectangle {
                 theme: panel.theme
                 mono: true
                 Layout.fillWidth: true
+                // 明确允许压缩：否则输入框的隐式宽度会成为本行的最小宽度（行内容 ~656px）
+                Layout.minimumWidth: 120
                 placeholderText: qsTr("如 01 02 03 04")
                 text: "01 02 03 04 05 06 07 08"
             }
@@ -246,28 +284,59 @@ Rectangle {
                 enabled: canDevice.open
                 onClicked: panel.doSend()
             }
-            AppButton {
+
+            Rectangle { width: 1; height: 18; color: theme.border }
+
+            Text { text: qsTr("周期"); color: theme.textDim; font.pixelSize: 11 }
+            AppTextField {
+                id: quickIntervalField
+                objectName: "quickIntervalField"
                 theme: panel.theme
-                variant: "ghost"
-                iconName: "add"
-                text: qsTr("加入列表")
-                onClicked: panel.addToList()
+                mono: true
+                Layout.preferredWidth: 58
+                enabled: !panel.quickRunning()
+                text: "100"
+                inputMethodHints: Qt.ImhPreferNumbers
             }
-            AppButton {
+            Text { text: "ms"; color: theme.textFaint; font.pixelSize: 10 }
+
+            Text { text: qsTr("次数"); color: theme.textDim; font.pixelSize: 11 }
+            AppTextField {
+                id: quickRepeatField
+                objectName: "quickRepeatField"
                 theme: panel.theme
-                variant: panel.advanced ? "subtle" : "ghost"
-                iconName: panel.advanced ? "chevronDown" : "chevronUp"
-                text: qsTr("高级")
-                onClicked: panel.advanced = !panel.advanced
+                mono: true
+                Layout.preferredWidth: 48
+                enabled: !panel.quickRunning()
+                text: "1"
+                inputMethodHints: Qt.ImhPreferNumbers
+            }
+            Text { text: qsTr("0=循环"); color: theme.textFaint; font.pixelSize: 10 }
+
+            AppButton {
+                id: quickSendButton
+                objectName: "quickSendButton"
+                theme: panel.theme
+                variant: panel.quickRunning() ? "danger" : "success"
+                iconName: panel.quickRunning() ? "stop" : "play"
+                text: panel.quickRunning() ? qsTr("停止") : qsTr("周期发送")
+                enabled: canDevice.open
+                onClicked: panel.quickRunning() ? panel.stopQuick() : panel.startQuick()
+
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("把当前帧按上面的周期反复发出；次数 0 = 无限循环。\n"
+                                   + "递增填充 / ID 递增 / 滚动计数 / CRC-8 会作用到每一帧。")
             }
         }
 
         // ---------------- 选项 ----------------
         RowLayout {
+            objectName: "optionsRow"
             Layout.fillWidth: true
             spacing: 8
 
-            Text { text: qsTr("数据格式"); color: theme.textDim; font.pixelSize: 11 }
+            // "数据格式"标签已省略：Hex/ASCII/十进制 三个单选已自明（给新开关腾宽度）
             AppRadioButton {
                 id: hexRadio
                 theme: panel.theme
@@ -321,6 +390,12 @@ Rectangle {
                 text: qsTr("递增填充")
             }
             AppCheckBox {
+                id: idIncrCheck
+                objectName: "idIncrCheck"
+                theme: panel.theme
+                text: qsTr("ID 递增")
+            }
+            AppCheckBox {
                 id: rollingCheck
                 theme: panel.theme
                 text: qsTr("滚动计数")
@@ -336,99 +411,13 @@ Rectangle {
 
         Text {
             id: status
+            objectName: "sendStatus"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            color: theme.textDim
+            color: panel.statusColor()
             font.pixelSize: 11
             font.family: theme.sansFamily
-            text: canDevice.open ? qsTr("就绪") : qsTr("请先连接设备")
-        }
-
-        // ---------------- 高级：多帧列表 ----------------
-        AppCard {
-            theme: panel.theme
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            visible: panel.advanced
-            padding: 8
-
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: 6
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    Text {
-                        text: qsTr("多帧列表")
-                        color: theme.text
-                        font.pixelSize: 12
-                        font.bold: true
-                        font.family: theme.sansFamily
-                    }
-                    Text {
-                        text: qsTr("%1 帧").arg(listModel.count)
-                        color: theme.textFaint
-                        font.pixelSize: 10
-                        font.family: theme.monoFamily
-                    }
-                    Item { Layout.fillWidth: true }
-                    AppButton {
-                        theme: panel.theme
-                        variant: "success"
-                        text: qsTr("发送全部")
-                        implicitHeight: 26
-                        enabled: canDevice.open && listModel.count > 0
-                        onClicked: panel.sendAll()
-                    }
-                    AppButton {
-                        theme: panel.theme
-                        variant: "subtle"
-                        text: qsTr("发送选中")
-                        implicitHeight: 26
-                        enabled: canDevice.open && listModel.count > 0
-                        onClicked: panel.sendSelected()
-                    }
-                    AppButton {
-                        theme: panel.theme
-                        variant: "ghost"
-                        text: qsTr("清空")
-                        implicitHeight: 26
-                        onClicked: { listModel.clear(); listView.currentIndex = -1 }
-                    }
-                }
-
-                ListView {
-                    id: listView
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: listModel
-                    boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: SlimScrollBar { theme: panel.theme }
-
-                    delegate: Rectangle {
-                        width: listView.width
-                        height: 24
-                        color: (index === listView.currentIndex) ? theme.panelAlt
-                               : (index % 2 ? Qt.rgba(1, 1, 1, 0.015) : "transparent")
-
-                        Text {
-                            anchors.fill: parent
-                            anchors.leftMargin: 6
-                            verticalAlignment: Text.AlignVCenter
-                            text: (index + 1) + ".  " + desc
-                            color: theme.text
-                            font.family: theme.monoFamily
-                            font.pixelSize: theme.fontSize
-                            elide: Text.ElideRight
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: listView.currentIndex = index
-                        }
-                    }
-                }
-            }
+            text: panel.statusText()
         }
     }
 }

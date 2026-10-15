@@ -138,7 +138,8 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
   （`parseData/formatData/convertData`，`dataByteCount` 校验）；数据生成 CRC-8（末字节，poly 0x07）、
   滚动计数（首字节）、递增填充（全字节，从 0 起）；标准/扩展、CAN/FD、数据/远程、BRS、
   DLC（0–8 / FD 0–64，FD 含 12/16/20/24/32/48）；发送模式 txm 四档 + echo；
-  单帧发送与多帧列表批量发送（`sendBatch`），均走 `canDevice.transmitCan/transmitFd`
+  单帧发送与批量发送（`sendBatch`，C++/CLI 接口；QML 侧已改为「快捷周期发送」见步骤 16），
+  均走 `canDevice.transmitCan/transmitFd`
 - 数据语义：以 DLC 为准，数据不足补零、超出截断；远程帧不带数据但保留 DLC
 - 验证：
   - `test_framebuilder` **12 项全部通过**（Hex/ASCII/Dec、错误输入、ID 掩码、CRC 已知值 0xF4、
@@ -349,10 +350,127 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 - 验证：
   - `ctest` **13/13 通过**；`test_periodicsender` **25 项全通过**（含纯逻辑 17 项 +
     调度/发送/线程路径 7 项，后者经测试缝 `setTransmitBackend` 注入无硬件替身）
-  - **TSan 0 警告、ASan 0 错误/泄漏**（覆盖真实调度与发送线程）
+  - **ASan 0 错误/泄漏**（覆盖真实调度与发送线程）
+  - ⚠️ TSan：本会话复测**并非稳定 0 告警**（20 次连跑共 2 条，约 40% 的运行会出现 1–2 条）。
+    已用最小复现程序定位：**只做 `QMetaObject::invokeMethod(obj, lambda, Qt::QueuedConnection)`
+    跨线程回投就会报**（15/15 次复现），raced 内存是 Qt 的 functor 载荷
+    （`qobjectdefs_impl.h`），与 `PeriodicSender` 的业务逻辑无关 ——
+    同「风险 5/Qt 5.15 QMutex 为 futex 实现、TSan 无法建立 happens-before」一类，
+    根因是 `libQt5Core` 未插桩。处理方式见「步骤 15」待办。
   - `QT_QPA_PLATFORM=offscreen ./build/CanDebugger` 无 QML 报错
 - 未验证（需实机）：真实总线上的周期精度、`VCI_Transmit` 阻塞下的队列行为、
   以及 >8 条的实机并发发送
+
+---
+
+## 步骤 15 — 周期发送批量提交（同 tick 帧合并为一次 USB 调用） ✅ 完成（实机前后对比）
+- 背景（实机反馈）：一张 10 条、周期均 100ms 的周期表，表内相邻报文在总线上间隔约 **1ms**，
+  即整表首尾被拉开约 10ms（占 100ms 周期的 10%）。
+- 根因：发送线程对**每一帧**各调一次阻塞式 `VCI_Transmit`（`count=1`），每帧一次 USB 往返
+  （实测 ~0.7–1ms/帧），与周期值无关；总线本身远没这么慢（500k 经典 8 字节帧约 0.24ms）。
+- 实机探针（`test_ui_blocking --diag-batch`，自发自收，10 帧）：
+  | 方式 | 10 帧总耗时 | 折合每帧 |
+  |---|---|---|
+  | 逐帧 10 次 `VCI_Transmit` | 7.64 ms | **0.76 ms** |
+  | 一次 `VCI_Transmit(count=10)` | 3.33 ms | **0.33 ms** |
+  | 一次 `VCI_TransmitFD(count=10)` | 2.30 ms | **0.23 ms** |
+  无 ACK 总线上：逐帧 204 ms（10×20ms 超时）vs 合批 20.5 ms —— **超时按调用计一次，不按帧数累加**；
+  `ret` 为**实际成功提交的帧数**（成功 10/10、无 ACK 0/10、256 帧一次调用 256/256）。
+- 改动：
+  - `CanDevice` 新增 `transmitBatchCan/transmitBatchFd(port, msgs, count)`；`transmitCan/transmitFd`
+    改为其 `count=1` 封装，去掉重复实现
+  - `PeriodicSender`：发送线程改为**成批取队列**（同一通道连续段、上限 `kBatchMax=64`），
+    一批交给后端一次提交；`splitSpecIndicesByType()` 把一批按类型拆成 CAN / CAN-FD 两组
+    （组内保序，**CAN 组在前**），故一批最多 2 次 USB 调用；跨类型相对顺序可能变化
+    —— 明确取舍：优先减少调用次数（用户选定）
+  - 测试缝 `setTransmitBackend` 的发送回调改为**批量语义**且返回**逐帧结果**
+    （`QVector<bool>`，与 specs 等长）；因为拆批后提交顺序 ≠ 表内顺序，只有逐帧结果才能准确记账。
+    `markGroupSubmitted()` 负责「组内前 n 帧成功」→ 原下标的映射（纯函数，已单测）
+  - 记账：仅对成功提交的帧计入 `Statistics::countSent`、写入 `Recorder`；部分失败时通知
+    文案给出「已发出 x/y」；整批失败沿用「总线无应答…」提示
+- 验证：
+  - `ctest` **13/13**；`test_periodicsender` **31 项全通过**（新增：合批 `maxBatch/calls`、
+    部分失败、整批硬失败、100 条按 64 切分、`splitSpecIndicesByType`、`markGroupSubmitted`）
+  - **ASan 0 错误/泄漏**；TSan 与步骤 14 同量级（9/20 次运行），新代码未引入新的告警类别
+  - 新增实机探针 `./build/device_periodic_test [条数] [周期ms] [运行ms]`：自发自收回灌，
+    按设备时间戳（100us/tick）算同 tick 内相邻帧间隔
+    | 10 条 × 100ms | 同 tick 相邻帧间隔（中位/范围） | tick 周期 |
+    |---|---|---|
+    | 改造前（逐帧，等价 `kBatchMax=1`） | **0.700 ms**（0.6–0.8） | 100.00 ms |
+    | 改造后（合批） | **0.300 ms**（0.2–0.4） | 100.00 ms |
+    已到 500k 经典 8 字节帧的总线极限；每 tick 稳定抽满整表（12 个满表 tick / 13）
+  - `device_send_test` 通过；`device_stress_test`（8 条 @5ms）**3402 fps、丢弃 0**
+    （改造前逐帧路径的 USB 往返上限约 1000–1300 fps）
+- 待办：TSan 的 Qt functor 假阳性要么加 suppressions 文件，要么把跨线程回投改成
+  GUI 线程定时器轮询（去掉 `invokeMethod(functor)` 与逐条通知的堆分配）
+
+---
+
+## 步骤 16 — 单帧面板「快捷周期发送」（删除多帧列表） ✅ 完成（离线验证）
+- 背景（界面反馈）：单帧发送右侧的「加入列表 / 高级（多帧列表）」实际是坏的 ——
+  `addToList()` 调用 `frameBuilder.describe(spec)`，而 `describe` 是普通静态方法（非
+  `Q_INVOKABLE`），不在元对象里，QML 调用必然 `TypeError`；由于异常发生在 `listModel.append()`
+  的实参求值阶段，列表**永远加不进任何条目**，于是「发送全部/发送选中」也全部失效。
+  展开高度也只有约 20px（`SendWorkspace` 固定 256 高），即使修好也几乎看不见。
+- 决策（用户选定）：**删掉多帧列表**，改为单帧面板自带的「快捷周期发送」；与周期页签
+  的配置表**完全互不干扰**；后端复用 `PeriodicSender` 的排期/批量/卡顿保护，不另写定时器。
+  这样也让「递增填充/滚动计数/CRC-8」真正有用（同一帧反复发送时滚动计数逐帧 +1）。
+- 改动：
+  - `SendPanel.qml`：删除 `advanced`、多帧列表卡片、`listModel/addToList/batchList/sendAll/
+    sendSelected`；「快捷周期」控件**并排进「数据 + 发送」那一行**（周期 ms + 次数 + 周期发送/
+    停止按钮，长提示改为按钮 ToolTip），默认 **周期 100ms / 次数 1 次**（0 = 循环，留空按 1 次）。
+    状态行改为由属性驱动的 `statusText()/statusColor()`（保持对 `canDevice.open` 的绑定，
+    不再被命令式赋值打断）
+  - `SendWorkspace.qml` / `Main.qml`：底部发送区高度按页签区分 —— 单帧页签 215（收紧 41px
+    给接收列表），周期/记录回放 256（表格高度不变）
+  - `PeriodicSender`：新增**快捷槽** `m_quick[2]`（每物理通道一个，恒 1 帧），与表通道
+    `m_channels[2]` 共用调度/发送线程；新增 `quickStates` 属性与
+    `startQuick/stopQuick/quickActive` 接口、`quickStatesChanged/quickOperationFinished` 信号。
+    调度器把原循环体抽成 `processSlotSet()` / `stopSlotSet()` 作用于两组槽位；
+    `SendItem/Notice` 增加 `quick` 标记，`purgeSendQueue(port, quick)` 按槽位清队列，
+    发送线程只合并「同通道 + 同槽位」的连续段，保证失败/积压通知各自归位
+  - `AppTextField`：补禁用态 `opacity`（运行中锁定周期/次数输入）
+- 验证：
+  - `ctest` **13/13**；`test_periodicsender` **38 项全通过**（新增 7 项：快捷槽次数/周期节奏、
+    滚动计数逐帧 0/1/2 与 `increment/crc/txm` 透传、与表通道互不干扰、设备断开自动停、
+    非法帧描述拒绝启动、`quickStates` 内容、`stopAll` 一并停）
+  - `tst_qml` **23 项全通过**（新增：快捷周期默认值、次数留空/非法回退 1 次、离线启动被拒并
+    给出原因且不串到周期页签、"数据+发送"行不超宽 + 状态行在可视区内 + 按页签高度 215/256）
+  - `QT_QPA_PLATFORM=offscreen ./build/CanDebugger` 无 QML 警告
+- 已知取舍：运行中不给 GUI 逐帧推状态（100ms 周期的信号风暴无意义），帧数看接收列表/统计；
+  周期/次数改动需「停止」后重新启动；同通道同时跑周期表与快捷槽时，发送顺序由 `CanDevice`
+  的 IO 锁决定，不做承诺
+- 顺带发现（**未处理，待定**）：底部单帧面板的**最小宽度为 829px**（由第 1 行"帧参数"决定，
+  与本次改动无关），而 1080 最小窗口下发送区只有 794−20=774px，故最小窗口时第 1/3 行右端
+  （发送模式 / CRC-8）会被窗口裁掉约 55px。本次已让"数据+发送"行自身只需约 620px（数据框
+  `Layout.minimumWidth: 120`）并加了回归断言；要彻底修需给第 1 行的下拉框加
+  `Layout.minimumWidth` 并去掉第 3 行冗余的"数据格式"标签（约 3 行改动），等确认后再做
+
+## 步骤 17 — 「ID 递增」开关 ✅ 完成（离线验证）
+- 背景（界面提问）：三个"数据生成"开关都只作用于**数据字节**（递增填充 = 数据 `00 01 02…`、
+  滚动计数 = 数据首字节、CRC-8 = 数据末字节），**没有任何按帧推进 ID 的能力**。
+- 改动：
+  - `FrameSpec` 新增 `incrementId`；`specFromMap/specToMap` 读写 `incrementId`
+  - 新增纯函数 `FrameBuilder::idForCounter(baseId, extended, incrementId, counter)`：
+    不勾选时等价 `clampId(baseId)`；勾选时 `(基址 + 计数器) & 位宽掩码`（标准 0x7FF /
+    扩展 0x1FFFFFFF 回绕）
+  - 三条发送路径都在"赋计数器"之后、**构建帧之前**把结果写回 `spec.id`，因此下发帧、
+    回显/记录帧（`FrameData.id`）、`describe()` 口径完全一致：
+    `FrameBuilder::sendFrame`（同步）、`FrameBuilder::enqueueOne`（异步）、
+    `PeriodicSender::processSlotSet`（周期表 + 快捷槽共走这里）
+  - 计数器推进条件由 `rolling` 放宽为 `rolling || incrementId`（两者共用一个计数器：
+    单帧路径 `m_counter`、周期/快捷路径各槽位自己的 `PeriodicRow.counter`）
+  - `SendPanel.qml`：新增「ID 递增」勾选框并进入 `specMap()`；为不让选项行变宽，
+    去掉冗余的"数据格式"标签（Hex/ASCII/十进制 已自明）
+- 验证：
+  - `test_framebuilder` **30 项全通过**（新增：`idIncrement` 标准/扩展回绕与基址掩码、
+    `idIncrementBuildCan`、`specToMap/specFromMap` 往返带 `incrementId`）
+  - `test_periodicsender` **40 项全通过**（新增：快捷槽 ID 递增 `0x7FE→0x7FF→0x000` 回绕、
+    ID 递增与滚动计数共用计数器同步推进）
+  - `tst_qml` **24 项全通过**（新增：`specMap()` 必须带 `incrementId` 且不顺带打开其他开关）
+  - 选项行隐式宽度 777 → 806（< 面板既有最小宽度 829，未撑大最小值）
+- 语义提醒：ID 递增与滚动计数共用计数器，同时勾选时**每帧既换 ID 又换数据首字节**；
+  若只想换 ID，请单独勾「ID 递增」
 
 ---
 
@@ -424,7 +542,10 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 13. **定时发送配置语义**：`ZCAN_TTX_CFG.size` 取字节数 `sizeof(ZCAN_TTX) * n`（**非条目数**），
     已按 SDK demo 修正并实机验证；`interval` 单位 100us，UI 以 ms 输入换算（最小 1 unit=100us）。
 14. **数据生成为本地约定**：CRC-8（poly 0x07、初值 0、写末字节）、滚动计数（写首字节）、
-    递增填充（从 0 起）。非通用协议，跨节点使用需与对端约定一致。
+    递增填充（数据从 0 起）、ID 递增（`idForCounter()`：ID = 基址 + 计数器，标准帧按 0x7FF、
+    扩展帧按 0x1FFFFFFF 回绕；与滚动计数**共用同一计数器**，故二者任一勾选都会逐帧 +1，
+    单帧路径的 `m_counter` 自增条件已同步放宽为 `rolling || incrementId`。
+    非通用协议，跨节点使用需与对端约定一致。
 15. **硬件验收滤波语义（步骤 6 实测）**：`ZCAN_FILTER_TABLE.size` 取**字节数**
     `sizeof(ZCAN_FILTER)*n`（取条目数会导致 `VCI_SetReference` 失败）；`sid..eid` 为闭区间；
     验收滤波仅作用于**总线接收**帧，本机发送回环（`inf.tx=1`）不受影响。UI 在通道运行中

@@ -261,6 +261,14 @@ if(CANDBG_BUILD_TESTS)
         INSTALL_RPATH "$ORIGIN/lib"
     )
 
+    # 步骤 15 实机验证：周期发送批量提交后，同 tick 相邻帧的总线级间隔
+    add_executable(device_periodic_test tests/device_periodic_test.cpp)
+    target_link_libraries(device_periodic_test PRIVATE candbg_core)
+    set_target_properties(device_periodic_test PROPERTIES
+        BUILD_RPATH "$ORIGIN/lib"
+        INSTALL_RPATH "$ORIGIN/lib"
+    )
+
     add_executable(device_filter_test tests/device_filter_test.cpp)
     target_link_libraries(device_filter_test PRIVATE candbg_core)
     set_target_properties(device_filter_test PROPERTIES
