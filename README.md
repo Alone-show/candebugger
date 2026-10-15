@@ -123,9 +123,23 @@ ui/CanDebugger/
 ```
 
 ## 位定时说明（重要）
-标准公式：`baud = clk / (brp * (1 + tseg1 + tseg2))`，时钟默认 `60 MHz`。
-⚠️ SDK 示例中的 500k/2M 参数与该公式不自洽，本工具**只实现标准公式**；
-若实测通信异常，请核对设备时钟或改用原始 `brp/tseg1/tseg2` 设置（后续步骤）。
+标准公式：`baud = clk / (brp * (1 + tseg1 + tseg2))`。
+- **实测标定（关键）**：SDK 的 `ZCAN_INIT.clk` 是**名义时钟**，而且 SDK 的实际分频
+  **不能可靠地用公式外推**（实测多个不同 `clk/brp/tq` 组合都能匹配同一速率，疑似按标准
+  波特率取整/查表）。因此对**已验证过的速率**使用「标定表」里的实测参数，优先于公式：
+  - 250k → 名义 60MHz，`brp=12 tseg1=13 tseg2=2 sjw=2`（内置，实测）
+  - 500k → 名义 80MHz，`brp=8  tseg1=13 tseg2=2 sjw=2`（内置，实测）
+  - 其它速率未标定时退回标准公式（实际时钟 = 0.8×名义）。
+- 每张通道卡显示**实际使用的位定时**，并标注「已标定 / 公式」；连接与「应用配置」
+  后的实际参数显示在左栏底部。
+- 标定表持久化在 `~/.config/CanDebugger/USBCANFD 调试器.conf`（QSettings）。
+- **新增速率标定**：`./build/device_calibrate <bps> [通道]`（需实机 + 对端在该速率上发送），
+  实测选出可用参数并写入标定表，App 重启即生效。
+- 高级：勾选「原始位定时（高级，覆盖公式）」可直接填写 `brp/tseg1/tseg2/sjw`，绕过标定与公式。
+- 排查工具：
+  - `./build/device_baud_scan [bps] [采样点%] [通道]`：按标准速率找位定时（被动监听 + ACK）。
+  - `./build/device_bitrate_scan [时钟MHz] [通道] [最小] [最大] [监听ms] [探针] [固定tq]`：
+    **模型无关**朴素扫描，用于未知时钟/未知速率时定位真实位定时。
 
 ## 测试
 详细测试计划与执行报告见 `TEST_PLAN.md`。
@@ -159,6 +173,9 @@ scripts/run_hw_tests.sh
 ./build/device_multichannel_test  # 双通道并发收发
 ./build/device_replay_test        # 记录→回放 ASC/CSV 回环
 ./build/device_stress_test        # ~1000fps 压力与内存
+./build/device_baud_scan 250000   # 位定时扫描（标准速率 + 监听/ACK）
+./build/device_bitrate_scan       # 模型无关朴素扫描（未知时钟/速率定位）
+./build/device_calibrate 500000   # 实测标定并写入标定表（App 共用）
 ```
 
 
@@ -189,6 +206,8 @@ scripts/run_hw_tests.sh
 - 发送模式默认「正常」。`VCI_Transmit` 正常模式会等待总线 ACK，无应答总线上默认等到 ~1.5s；
   `CanDevice::startChannel()` 会下发 `CMD_CAN_TX_TIMEOUT(0x44)`，等待上限由 `txTimeoutMs`
   控制（默认 20ms，可用 `canDevice.txTimeoutMs` 调整），超时后帧仍会提交。
+- 发送失败提示：返回失败时提示「总线无应答（请检查波特率/位定时、接线与终端电阻）」，
+  设备未打开则提示「设备未打开」——便于区分是**位定时不匹配**还是**设备状态问题**。
 
 ## 记录 / 回放说明
 - 记录接入：接收帧在 `RxManager::drain()` 中按批非阻塞入队（**显示层软件滤波之前**，

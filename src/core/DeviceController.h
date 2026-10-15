@@ -22,6 +22,7 @@ class DeviceController : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString busyText READ busyText NOTIFY busyTextChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
+    Q_PROPERTY(QString configReport READ configReport NOTIFY configReportChanged)
 
 public:
     DeviceController(CanDevice *device, RxManager *rx, QObject *parent = nullptr);
@@ -30,6 +31,7 @@ public:
     bool busy() const { return m_busy; }
     QString busyText() const { return m_busyText; }
     bool connected() const;
+    QString configReport() const { return m_configReport; }
 
     Q_INVOKABLE void connectDevice(const QVariantList &channels, bool merge);
     Q_INVOKABLE void applyConfig(const QVariantList &channels, bool merge);
@@ -39,6 +41,7 @@ signals:
     void busyChanged();
     void busyTextChanged();
     void connectedChanged();
+    void configReportChanged();
     void failed(const QString &message);
     void succeeded(const QString &message);
 
@@ -55,5 +58,7 @@ private:
     RxManager *m_rx = nullptr;
     bool m_busy = false;
     QString m_busyText;
+    QString m_configReport;
+    QString m_pendingReport;
     QThread *m_thread = nullptr;
 };

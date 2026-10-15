@@ -35,6 +35,8 @@ endif()
 add_library(candbg_core STATIC
     src/core/AsyncExecutor.cpp
     src/core/AsyncExecutor.h
+    src/core/BitCalibration.cpp
+    src/core/BitCalibration.h
     src/core/BitTiming.cpp
     src/core/BitTiming.h
     src/core/CanDevice.cpp
@@ -218,6 +220,30 @@ if(CANDBG_BUILD_TESTS)
     add_executable(device_ts_probe tests/device_ts_probe.cpp)
     target_link_libraries(device_ts_probe PRIVATE candbg_core)
     set_target_properties(device_ts_probe PROPERTIES
+        BUILD_RPATH "$ORIGIN/lib"
+        INSTALL_RPATH "$ORIGIN/lib"
+    )
+
+    # 波特率/位定时扫描诊断工具（需实机 + 对端），手动运行
+    add_executable(device_baud_scan tests/device_baud_scan.cpp)
+    target_link_libraries(device_baud_scan PRIVATE candbg_core)
+    set_target_properties(device_baud_scan PROPERTIES
+        BUILD_RPATH "$ORIGIN/lib"
+        INSTALL_RPATH "$ORIGIN/lib"
+    )
+
+    # 模型无关的分频积暴力扫描（不知道本机时钟时定位真实位定时）
+    add_executable(device_bitrate_scan tests/device_bitrate_scan.cpp)
+    target_link_libraries(device_bitrate_scan PRIVATE candbg_core)
+    set_target_properties(device_bitrate_scan PROPERTIES
+        BUILD_RPATH "$ORIGIN/lib"
+        INSTALL_RPATH "$ORIGIN/lib"
+    )
+
+    # 位定时标定：实测可用参数并写入标定表（与 App 共用 QSettings）
+    add_executable(device_calibrate tests/device_calibrate.cpp)
+    target_link_libraries(device_calibrate PRIVATE candbg_core)
+    set_target_properties(device_calibrate PROPERTIES
         BUILD_RPATH "$ORIGIN/lib"
         INSTALL_RPATH "$ORIGIN/lib"
     )

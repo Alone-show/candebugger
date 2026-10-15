@@ -1,6 +1,7 @@
 #include "core/DeviceController.h"
 
 #include <QMetaObject>
+#include <QStringList>
 #include <QThread>
 #include <QVariantMap>
 
@@ -67,6 +68,7 @@ QString DeviceController::configureAll(const QVariantList &channels, bool merge,
             m_device->resetChannel(ch);
     }
 
+    QStringList report;
     for (const QVariant &v : channels) {
         const QVariantMap m = v.toMap();
         const int port = m.value(QStringLiteral("port"), 0).toInt();
@@ -75,17 +77,40 @@ QString DeviceController::configureAll(const QVariantList &channels, bool merge,
         const double sample = m.value(QStringLiteral("sample"), 87.5).toDouble();
         const bool listen = m.value(QStringLiteral("listenOnly"), false).toBool();
         const bool term = m.value(QStringLiteral("terminator"), false).toBool();
+        // clock 缺省按设备硬件版本推断（V1.03+ 为 80MHz）
+        quint32 clock = m.value(QStringLiteral("clock"), 0).toUInt();
+        if (clock == 0)
+            clock = m_device->recommendedClock();
+        const bool useRaw = m.value(QStringLiteral("useRaw"), false).toBool();
 
-        const QString msg = m_device->configureChannel(port, arb, dat, sample, listen);
+        QString msg;
+        if (useRaw) {
+            msg = m_device->configureChannelRaw(port, clock, listen,
+                                                m.value(QStringLiteral("arbBrp"), 0).toInt(),
+                                                m.value(QStringLiteral("arbTseg1"), 0).toInt(),
+                                                m.value(QStringLiteral("arbTseg2"), 0).toInt(),
+                                                m.value(QStringLiteral("arbSjw"), 0).toInt(),
+                                                m.value(QStringLiteral("arbSmp"), 0).toInt(),
+                                                m.value(QStringLiteral("dataBrp"), 0).toInt(),
+                                                m.value(QStringLiteral("dataTseg1"), 0).toInt(),
+                                                m.value(QStringLiteral("dataTseg2"), 0).toInt(),
+                                                m.value(QStringLiteral("dataSjw"), 0).toInt(),
+                                                m.value(QStringLiteral("dataSmp"), 0).toInt());
+        } else {
+            msg = m_device->configureChannel(port, arb, dat, sample, listen, clock);
+        }
         if (msg.isEmpty())
-            return QStringLiteral("通道 %1 配置失败（无匹配位定时）").arg(port + 1);
+            return QStringLiteral("通道 %1 配置失败（无匹配位定时，检查时钟/波特率）").arg(port + 1);
 
         m_device->setTerminalResistor(port, term);
         if (!m_device->startChannel(port))
             return QStringLiteral("通道 %1 启动失败").arg(port + 1);
+
+        report << QStringLiteral("CH%1: %2").arg(port + 1).arg(msg);
     }
 
     m_device->setRecvMerge(0, merge);
+    m_pendingReport = report.join(QStringLiteral("\n"));
     return QString();
 }
 
@@ -153,6 +178,11 @@ void DeviceController::finishListen(const QVariantList &channels, bool merge, co
     }
 
     setBusy(false, QString());
+
+    if (m_configReport != m_pendingReport) {
+        m_configReport = m_pendingReport;
+        emit configReportChanged();
+    }
     emit connectedChanged();
 
     if (err.isEmpty())
@@ -178,6 +208,11 @@ void DeviceController::disconnectDevice()
 
         QMetaObject::invokeMethod(this, [this]() {
             setBusy(false, QString());
+            if (!m_configReport.isEmpty()) {
+                m_configReport.clear();
+                m_pendingReport.clear();
+                emit configReportChanged();
+            }
             emit connectedChanged();
             emit succeeded(QStringLiteral("设备已断开"));
         }, Qt::QueuedConnection);

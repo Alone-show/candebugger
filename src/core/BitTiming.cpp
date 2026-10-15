@@ -21,7 +21,20 @@ QString makeMessage(quint32 clk, quint32 bps, const BitTimingParams &p, bool exa
 
 } // namespace
 
-BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePointPercent, int maxTq)
+quint32 BitTiming::clockForHardwareVersion(quint16 hwv)
+{
+    // SDK 说明：V1.01 名义时钟 60MHz，V1.03 及以上 80MHz
+    return hwv >= HwV1_03 ? Clock80M : DefaultClock;
+}
+
+quint32 BitTiming::canClockForSdkClock(quint32 sdkClk)
+{
+    // 实测：实际 CAN 控制器时钟 = 0.8 × 名义时钟（48MHz / 64MHz）
+    return static_cast<quint32>((static_cast<quint64>(sdkClk) * 4ull) / 5ull);
+}
+
+BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePointPercent,
+                                     int maxTq, int preferredTq)
 {
     BitTimingResult result;
 
@@ -33,11 +46,15 @@ BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePoin
         maxTq = 8;
     if (maxTq > 255)
         maxTq = 255;
+    if (preferredTq < 8)
+        preferredTq = 8;
 
     const double target = qBound(0.50, samplePointPercent / 100.0, 0.95);
 
     bool found = false;
     double bestErr = 1e9;
+    bool bestRobust = false;      // sjw >= 2 视为稳健配置
+    int bestTqDist = 0;
     BitTimingParams bestParams;
 
     for (int pass = 0; pass < 2 && !found; ++pass) {
@@ -75,10 +92,30 @@ BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePoin
             // 波特率误差权重更高
             const double score = baudErr * 100.0 + spErr;
 
-            if (score < bestErr - 1e-12) {
-                bestErr = score;
-                bestParams = p;
+            // 仅在误差相同时用稳健性/Tq 数做 tie-break：
+            // 1) 优先 sjw >= 2（抗抖动）；2) 其次 Tq 数接近 preferredTq（经典 CAN 约 16）
+            const bool robust = (p.sjw >= 2);
+            const int tqDist = qAbs(n - preferredTq);
+
+            constexpr double kEps = 1e-9;
+            bool better = false;
+            if (!found) {
+                better = true;
+            } else if (score < bestErr - kEps) {
+                better = true;
+            } else if (score <= bestErr + kEps) {
+                if (robust != bestRobust)
+                    better = robust;
+                else if (tqDist < bestTqDist)
+                    better = true;
+            }
+
+            if (better) {
                 found = true;
+                bestErr = score;
+                bestRobust = robust;
+                bestTqDist = tqDist;
+                bestParams = p;
                 result.exact = exactOnly;
             }
         }

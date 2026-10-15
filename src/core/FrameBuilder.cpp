@@ -418,7 +418,9 @@ bool FrameBuilder::sendFrame(int port, const QVariantMap &specMap)
         setError(QString());
         emit sentCountChanged();
     } else {
-        setError(QStringLiteral("发送失败（设备未打开或参数无效）"));
+        setError(m_device
+                     ? QStringLiteral("发送失败：总线无应答（请检查波特率/位定时、接线与终端电阻）")
+                     : QStringLiteral("发送失败：设备未打开"));
     }
     return ok;
 }
@@ -512,7 +514,9 @@ void FrameBuilder::finishSend(bool ok, const QString &description,
                               const std::shared_ptr<FrameData> &record)
 {
     if (!ok) {
-        const QString err = QStringLiteral("发送失败（设备未打开或参数无效）");
+        const QString err = m_device
+                                ? QStringLiteral("发送失败：总线无应答（请检查波特率/位定时、接线与终端电阻）")
+                                : QStringLiteral("发送失败：设备未打开");
         setError(err);
         emit sendCompleted(false, description, err);
         return;

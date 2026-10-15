@@ -4,6 +4,8 @@
 #include <cstring>
 #include <mutex>
 
+#include "core/BitCalibration.h"
+
 CanDevice::CanDevice(QObject *parent)
     : QObject(parent)
 {
@@ -154,20 +156,47 @@ bool CanDevice::initChannel(quint32 port, const ChannelConfig &cfg)
 }
 
 QString CanDevice::configureChannel(int port, int arbitrationBps, int dataBps,
-                                    double samplePointPercent, bool listenOnly)
+                                    double samplePointPercent, bool listenOnly, quint32 clock)
 {
     if (!isOpen())
         return QString();
 
-    const quint32 clock = BitTiming::DefaultClock;
-    const auto arb = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)), samplePointPercent);
-    if (!arb.ok)
-        return QString();
+    if (clock == 0)
+        clock = BitTiming::DefaultClock;
 
-    BitTimingParams dataParams = arb.params;
+    BitTimingParams arbParams;
+    QString arbMsg;
+    bool calibrated = false;
+
+    // 优先使用实测标定表（SDK 的实际分频不能可靠地用公式外推）
+    const CalibrationEntry cal = BitCalibration::instance().lookup(arbitrationBps);
+    if (cal.valid) {
+        arbParams = cal.params;
+        clock = cal.clock;   // 用标定时验证过的名义时钟
+        calibrated = true;
+        arbMsg = QStringLiteral("已标定 clk=%1 brp=%2 tseg1=%3 tseg2=%4 sjw=%5")
+                     .arg(clock)
+                     .arg(cal.params.brp)
+                     .arg(cal.params.tseg1)
+                     .arg(cal.params.tseg2)
+                     .arg(cal.params.sjw);
+    } else {
+        // 公式用实际时钟（0.8×名义）；下发给 SDK 的 clk 仍是名义值
+        const quint32 canClk = BitTiming::canClockForSdkClock(clock);
+        const auto r = BitTiming::calculate(canClk, static_cast<quint32>(qMax(1, arbitrationBps)),
+                                            samplePointPercent);
+        if (!r.ok)
+            return QString();
+        arbParams = r.params;
+        arbMsg = r.message;
+    }
+
+    // 数据域：始终用公式（以最终名义时钟换算）
+    const quint32 canClk = BitTiming::canClockForSdkClock(clock);
+    BitTimingParams dataParams = arbParams;
     QString dataMsg;
     if (dataBps > 0) {
-        const auto dat = BitTiming::calculate(clock, static_cast<quint32>(dataBps), samplePointPercent);
+        const auto dat = BitTiming::calculate(canClk, static_cast<quint32>(dataBps), samplePointPercent);
         if (!dat.ok)
             return QString();
         dataParams = dat.params;
@@ -177,15 +206,158 @@ QString CanDevice::configureChannel(int port, int arbitrationBps, int dataBps,
     ChannelConfig cfg;
     cfg.clock = clock;
     cfg.mode = listenOnly ? 1u : 0u;
-    cfg.arbitration = arb.params;
+    cfg.arbitration = arbParams;
     cfg.data = dataParams;
 
     if (!initChannel(static_cast<quint32>(port), cfg))
         return QString();
 
+    Q_UNUSED(calibrated);
     if (dataMsg.isEmpty())
-        return arb.message;
-    return arb.message + QStringLiteral(" | ") + dataMsg;
+        return arbMsg;
+    return arbMsg + QStringLiteral(" | ") + dataMsg;
+}
+
+QString CanDevice::configureChannelRaw(int port, quint32 clock, bool listenOnly,
+                                      int arbBrp, int arbTseg1, int arbTseg2, int arbSjw, int arbSmp,
+                                      int dataBrp, int dataTseg1, int dataTseg2, int dataSjw, int dataSmp)
+{
+    if (!isOpen())
+        return QString();
+    if (clock == 0)
+        clock = BitTiming::DefaultClock;
+
+    BitTimingParams arb;
+    arb.brp = static_cast<quint16>(qBound(1, arbBrp, 1024));
+    arb.tseg1 = static_cast<quint8>(qBound(1, arbTseg1, 255));
+    arb.tseg2 = static_cast<quint8>(qBound(1, arbTseg2, 255));
+    arb.sjw = static_cast<quint8>(qBound(1, arbSjw, 255));
+    arb.smp = static_cast<quint8>(qBound(0, arbSmp, 1));
+
+    BitTimingParams dat = arb;
+    bool hasData = false;
+    if (dataBrp > 0 && dataTseg1 > 0 && dataTseg2 > 0) {
+        dat.brp = static_cast<quint16>(qBound(1, dataBrp, 1024));
+        dat.tseg1 = static_cast<quint8>(qBound(1, dataTseg1, 255));
+        dat.tseg2 = static_cast<quint8>(qBound(1, dataTseg2, 255));
+        dat.sjw = static_cast<quint8>(qBound(1, dataSjw, 255));
+        dat.smp = static_cast<quint8>(qBound(0, dataSmp, 1));
+        hasData = true;
+    }
+
+    ChannelConfig cfg;
+    cfg.clock = clock;
+    cfg.mode = listenOnly ? 1u : 0u;
+    cfg.arbitration = arb;
+    cfg.data = dat;
+
+    if (!initChannel(static_cast<quint32>(port), cfg))
+        return QString();
+
+    auto describe = [clock](const BitTimingParams &p) {
+        return QStringLiteral("brp=%1 tseg1=%2 tseg2=%3 sjw=%4 -> %5 bps 采样点 %6%")
+            .arg(p.brp)
+            .arg(p.tseg1)
+            .arg(p.tseg2)
+            .arg(p.sjw)
+            .arg(QString::number(BitTiming::actualBps(clock, p), 'f', 0))
+            .arg(QString::number(BitTiming::samplePoint(p), 'f', 1));
+    };
+
+    QString msg = QStringLiteral("原始位定时 clk=%1 仲裁 %2").arg(clock).arg(describe(arb));
+    if (hasData)
+        msg += QStringLiteral(" | 数据 %1").arg(describe(dat));
+    return msg;
+}
+
+QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
+                                        double samplePointPercent, quint32 clock) const
+{
+    QVariantMap out;
+    if (clock == 0)
+        clock = BitTiming::DefaultClock;
+    // 公式用实际时钟；SDK 用名义时钟
+    quint32 canClk = BitTiming::canClockForSdkClock(clock);
+
+    bool calibrated = false;
+    BitTimingParams arbParams;
+    double arbActual = 0.0;
+    double arbSp = 0.0;
+    QString arbMessage;
+
+    const CalibrationEntry cal = BitCalibration::instance().lookup(arbitrationBps);
+    if (cal.valid) {
+        calibrated = true;
+        clock = cal.clock;
+        canClk = BitTiming::canClockForSdkClock(clock);
+        arbParams = cal.params;
+        arbActual = BitTiming::actualBps(canClk, cal.params);
+        arbSp = BitTiming::samplePoint(cal.params);
+        arbMessage = QStringLiteral("已标定（%1）brp=%2 tseg1=%3 tseg2=%4 sjw=%5")
+                         .arg(cal.source)
+                         .arg(cal.params.brp)
+                         .arg(cal.params.tseg1)
+                         .arg(cal.params.tseg2)
+                         .arg(cal.params.sjw);
+    } else {
+        const auto arb = BitTiming::calculate(canClk, static_cast<quint32>(qMax(1, arbitrationBps)),
+                                              samplePointPercent);
+        arbParams = arb.params;
+        arbActual = arb.actualBps;
+        arbSp = arb.samplePoint;
+        arbMessage = arb.message;
+        out.insert(QStringLiteral("arbOk"), arb.ok);
+        if (!arb.ok) {
+            out.insert(QStringLiteral("ok"), false);
+            out.insert(QStringLiteral("message"), arb.message);
+            out.insert(QStringLiteral("clock"), clock);
+            out.insert(QStringLiteral("canClock"), canClk);
+            out.insert(QStringLiteral("calibrated"), false);
+            return out;
+        }
+    }
+
+    out.insert(QStringLiteral("clock"), clock);
+    out.insert(QStringLiteral("canClock"), canClk);
+    out.insert(QStringLiteral("calibrated"), calibrated);
+    out.insert(QStringLiteral("arbOk"), true);
+    out.insert(QStringLiteral("arbMessage"), arbMessage);
+    out.insert(QStringLiteral("arbActualBps"), arbActual);
+    out.insert(QStringLiteral("arbSamplePoint"), arbSp);
+    out.insert(QStringLiteral("arbBrp"), arbParams.brp);
+    out.insert(QStringLiteral("arbTseg1"), arbParams.tseg1);
+    out.insert(QStringLiteral("arbTseg2"), arbParams.tseg2);
+    out.insert(QStringLiteral("arbSjw"), arbParams.sjw);
+
+    const bool ok = true;
+    QString message = arbMessage;
+    if (dataBps > 0) {
+        const auto dat = BitTiming::calculate(canClk, static_cast<quint32>(dataBps), samplePointPercent);
+        out.insert(QStringLiteral("dataOk"), dat.ok);
+        out.insert(QStringLiteral("dataMessage"), dat.message);
+        out.insert(QStringLiteral("dataActualBps"), dat.actualBps);
+        out.insert(QStringLiteral("dataSamplePoint"), dat.samplePoint);
+        out.insert(QStringLiteral("dataBrp"), dat.params.brp);
+        out.insert(QStringLiteral("dataTseg1"), dat.params.tseg1);
+        out.insert(QStringLiteral("dataTseg2"), dat.params.tseg2);
+        out.insert(QStringLiteral("dataSjw"), dat.params.sjw);
+        if (dat.ok)
+            message += QStringLiteral(" | ") + dat.message;
+    } else {
+        out.insert(QStringLiteral("dataOk"), true);
+    }
+
+    out.insert(QStringLiteral("ok"), ok);
+    out.insert(QStringLiteral("message"), message);
+    return out;
+}
+
+quint32 CanDevice::recommendedClock() const
+{
+    // 实测（device_bitrate_scan + 外部 ZLG 对端）本机在本卡上以「名义 60MHz / 实际 48MHz」
+    // 与对端 250k 完全对齐（brp=12 tseg1=13 tseg2=2）。名义 80MHz（实际 64MHz）在本卡上
+    // 持续拿不到 ACK，故默认返回 60MHz；80MHz 仍可在界面手动选择。
+    return BitTiming::DefaultClock;
 }
 
 bool CanDevice::startChannel(int port)

@@ -1,0 +1,20 @@
+# CMake 构建目录
+build/
+build-*/
+cmake-build-*/
+
+# CMake / 构建产物
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.a
+compile_commands.json
+Testing/
+
+# 编辑器 / 工具缓存
+.cache/
+*.user
+.vscode/
+.idea/

@@ -11,6 +11,8 @@ Rectangle {
     readonly property var dataRates: [500000, 1000000, 2000000, 4000000, 5000000]
     readonly property var modeLabels: [qsTr("正常模式"), qsTr("只听模式")]
     readonly property var termLabels: [qsTr("开启"), qsTr("关闭")]
+    // 0=自动（按硬件版本推断），1=60MHz（实 48），2=80MHz（实 64）
+    readonly property var clockLabels: [qsTr("自动"), "60 MHz", "80 MHz"]
 
     color: theme.panel
 
@@ -33,7 +35,19 @@ Rectangle {
                 "dat": panel.dataRates[card.dataIndex],
                 "sample": card.sample,
                 "listenOnly": card.listenOnly,
-                "terminator": card.terminator
+                "terminator": card.terminator,
+                "clock": card.effectiveClock,
+                "useRaw": card.useRaw,
+                "arbBrp": card.rawInt(card.rawBrp),
+                "arbTseg1": card.rawInt(card.rawTseg1),
+                "arbTseg2": card.rawInt(card.rawTseg2),
+                "arbSjw": card.rawInt(card.rawSjw),
+                "arbSmp": card.rawInt(card.rawSmp),
+                "dataBrp": card.rawInt(card.rawDataBrp),
+                "dataTseg1": card.rawInt(card.rawDataTseg1),
+                "dataTseg2": card.rawInt(card.rawDataTseg2),
+                "dataSjw": card.rawInt(card.rawDataSjw),
+                "dataSmp": card.rawInt(card.rawDataSmp)
             })
         }
         return list
@@ -70,7 +84,8 @@ Rectangle {
 
         ColumnLayout {
             id: col
-            width: flick.width - (flick.ScrollBar.vertical.visible ? 8 : 0)
+            // 固定预留滚动条宽度：若按 visible 动态计算会与 contentHeight 形成绑定环
+            width: flick.width - 8
             spacing: 10
 
             SectionHeader { theme: panel.theme; title: qsTr("设备"); iconName: "plug" }
@@ -188,12 +203,24 @@ Rectangle {
                 text: deviceController.busy ? deviceController.busyText
                       : (deviceController.connected ? qsTr("已连接 · 实时监听中") : qsTr("未连接"))
             }
+
+            // 应用后的实际位定时（排查波特率不匹配的关键信息）
+            Text {
+                Layout.fillWidth: true
+                visible: deviceController.configReport.length > 0
+                wrapMode: Text.WordWrap
+                color: theme.textFaint
+                font.pixelSize: 10
+                font.family: theme.monoFamily
+                text: deviceController.configReport
+            }
         }
     }
 
     // ---------------- 通道配置卡 ----------------
     component ChannelCard: Rectangle {
         id: card
+        objectName: "channelCard_" + channel
         property var theme
         property int channel: 0
         property bool running: false
@@ -203,6 +230,34 @@ Rectangle {
         property real sample: 87.5
         property bool terminator: channel === 0
         property bool listenOnly: false
+
+        // 0=自动，1=60MHz，2=80MHz
+        property int clockIndex: 0
+        // 高级：原始位定时覆盖（默认给出实测可用的 250k 参数：brp=12 tseg1=13 tseg2=2）
+        property bool useRaw: false
+        property string rawBrp: "12"
+        property string rawTseg1: "13"
+        property string rawTseg2: "2"
+        property string rawSjw: "2"
+        property string rawSmp: "0"
+        property string rawDataBrp: "0"
+        property string rawDataTseg1: "0"
+        property string rawDataTseg2: "0"
+        property string rawDataSjw: "0"
+        property string rawDataSmp: "0"
+
+        readonly property int effectiveClock: clockIndex === 1 ? 60000000
+                                              : (clockIndex === 2 ? 80000000
+                                                                  : canDevice.recommendedClock)
+        readonly property var preview: canDevice.bitTimingPreview(
+                                           panel.arbRates[arbIndex],
+                                           panel.dataRates[dataIndex],
+                                           sample, effectiveClock)
+
+        function rawInt(s) {
+            var v = parseInt(s)
+            return isNaN(v) ? 0 : v
+        }
 
         readonly property var modeLabels: [qsTr("正常模式"), qsTr("只听模式")]
         readonly property var termLabels: [qsTr("开启"), qsTr("关闭")]
@@ -264,6 +319,15 @@ Rectangle {
                     model: ["500 k", "1 M", "2 M", "4 M", "5 M"]
                     currentIndex: card.dataIndex
                     onActivated: card.dataIndex = index
+                }
+
+                Text { text: qsTr("控制器时钟"); color: theme.textDim; font.pixelSize: 11 }
+                AppComboBox {
+                    theme: card.theme
+                    Layout.fillWidth: true
+                    model: panel.clockLabels
+                    currentIndex: card.clockIndex
+                    onActivated: card.clockIndex = index
                 }
 
                 Text { text: qsTr("工作模式"); color: theme.textDim; font.pixelSize: 11 }
@@ -328,6 +392,80 @@ Rectangle {
                         Layout.preferredWidth: 38
                     }
                 }
+            }
+
+            // 实际位定时（放在 GridLayout 之外，避免 columnSpan + 自动换行造成布局反复失效）
+            Text {
+                objectName: "bitTimingText_" + card.channel
+                Layout.fillWidth: true
+                color: card.preview.ok ? theme.textDim : theme.error
+                font.pixelSize: 10
+                font.family: theme.monoFamily
+                text: {
+                    var p = card.preview
+                    if (!p.ok)
+                        return qsTr("位定时无解（检查时钟与波特率）")
+                    // 注意：QML 运行时没有 QString，未标定速率（如 125k / 1M）会因短路求值
+                    // 走到这里抛 ReferenceError；空前缀用 "" 表达。
+                    var prefix = p.calibrated ? qsTr("已标定 · ") : ""
+                    return prefix
+                           + qsTr("名义%1MHz(实际%2MHz) · %3 bps · brp=%4 tseg1=%5 tseg2=%6 sjw=%7 · SP %8%")
+                        .arg(p.clock / 1000000)
+                        .arg(p.canClock / 1000000)
+                        // bps 来自 C++ 的 double，QML 的 arg(double) 用 %g(6) 会把 1000000 打成 1e+06
+                        .arg(Number(p.arbActualBps).toFixed(0))
+                        .arg(p.arbBrp)
+                        .arg(p.arbTseg1)
+                        .arg(p.arbTseg2)
+                        .arg(p.arbSjw)
+                        .arg(Number(p.arbSamplePoint).toFixed(1))
+                }
+            }
+
+            AppCheckBox {
+                theme: card.theme
+                Layout.fillWidth: true
+                text: qsTr("原始位定时（高级，覆盖公式）")
+                checked: card.useRaw
+                onToggled: card.useRaw = checked
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: card.useRaw
+                spacing: 4
+                Text { text: qsTr("仲裁"); color: theme.textDim; font.pixelSize: 11 }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawBrp; onTextEdited: card.rawBrp = text
+                               placeholderText: "brp" }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawTseg1; onTextEdited: card.rawTseg1 = text
+                               placeholderText: "tseg1" }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawTseg2; onTextEdited: card.rawTseg2 = text
+                               placeholderText: "tseg2" }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawSjw; onTextEdited: card.rawSjw = text
+                               placeholderText: "sjw" }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                visible: card.useRaw
+                spacing: 4
+                Text { text: qsTr("数据"); color: theme.textDim; font.pixelSize: 11 }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawDataBrp; onTextEdited: card.rawDataBrp = text
+                               placeholderText: "brp" }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawDataTseg1; onTextEdited: card.rawDataTseg1 = text
+                               placeholderText: "tseg1" }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawDataTseg2; onTextEdited: card.rawDataTseg2 = text
+                               placeholderText: "tseg2" }
+                AppTextField { theme: card.theme; mono: true; Layout.fillWidth: true
+                               text: card.rawDataSjw; onTextEdited: card.rawDataSjw = text
+                               placeholderText: "sjw" }
             }
         }
     }

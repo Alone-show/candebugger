@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantMap>
 
 #include <atomic>
 #include <mutex>
@@ -40,6 +41,8 @@ class CanDevice : public QObject
     Q_PROPERTY(QString versionText READ versionText NOTIFY deviceInfoChanged)
     Q_PROPERTY(int channels READ channels NOTIFY deviceInfoChanged)
     Q_PROPERTY(int txTimeoutMs READ txTimeoutMs WRITE setTxTimeoutMs NOTIFY txTimeoutChanged)
+    // 依据硬件版本推荐的 CAN 控制器时钟（V1.03+ 为 80MHz）
+    Q_PROPERTY(quint32 recommendedClock READ recommendedClock NOTIFY deviceInfoChanged)
 
 public:
     static constexpr quint32 DeviceType = 33;   // USBCANFD
@@ -62,9 +65,25 @@ public:
     bool initChannel(quint32 port, const ChannelConfig &cfg);
 
     // QML 便捷接口：按波特率自动计算位定时；成功返回描述文本，失败返回空串
+    // clock: 0 表示使用 BitTiming::DefaultClock（60MHz）
     Q_INVOKABLE QString configureChannel(int port, int arbitrationBps, int dataBps,
                                          double samplePointPercent = 87.5,
-                                         bool listenOnly = false);
+                                         bool listenOnly = false,
+                                         quint32 clock = 0);
+
+    // 高级接口：直接下发原始位定时参数（不做公式计算）；成功返回描述文本，失败返回空串
+    Q_INVOKABLE QString configureChannelRaw(int port, quint32 clock, bool listenOnly,
+                                            int arbBrp, int arbTseg1, int arbTseg2,
+                                            int arbSjw, int arbSmp,
+                                            int dataBrp, int dataTseg1, int dataTseg2,
+                                            int dataSjw, int dataSmp);
+
+    // 预览公式计算出的位定时（不改动设备状态）
+    Q_INVOKABLE QVariantMap bitTimingPreview(int arbitrationBps, int dataBps,
+                                             double samplePointPercent, quint32 clock) const;
+
+    // 依据硬件版本给出推荐的 CAN 控制器时钟（设备未打开时返回默认 60MHz）
+    Q_INVOKABLE quint32 recommendedClock() const;
 
     Q_INVOKABLE bool startChannel(int port);
     Q_INVOKABLE bool resetChannel(int port);
