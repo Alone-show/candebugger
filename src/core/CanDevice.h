@@ -65,7 +65,8 @@ public:
     bool initChannel(quint32 port, const ChannelConfig &cfg);
 
     // QML 便捷接口：按波特率自动计算位定时；成功返回描述文本，失败返回空串
-    // clock: 0 表示使用 BitTiming::DefaultClock（60MHz）
+    // clock: 控制器时钟(clk)，0 表示 BitTiming::DefaultClock(60MHz)；
+    //        V1.03+ 硬件应为 80MHz（界面「自动」= recommendedClock()）
     Q_INVOKABLE QString configureChannel(int port, int arbitrationBps, int dataBps,
                                          double samplePointPercent = 87.5,
                                          bool listenOnly = false,

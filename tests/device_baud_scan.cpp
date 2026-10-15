@@ -98,42 +98,26 @@ int main(int argc, char *argv[])
     QList<Candidate> candidates;
     QSet<QString> seen;
 
-    // 1) 公式在 60MHz / 80MHz / 推荐名义时钟下的最优解（公式用实际时钟 = 0.8×名义）
+    // 1) 公式在 60MHz / 80MHz / 推荐时钟下的最优解（ZLG 约定，clk 即真实时钟）
     for (quint32 clk : {60000000u, 80000000u, recommended}) {
         if (clk == 0)
             continue;
-        const quint32 canClk = BitTiming::canClockForSdkClock(clk);
-        const auto r = BitTiming::calculate(canClk, targetBps, samplePoint);
+        const auto r = BitTiming::calculate(clk, targetBps, samplePoint);
         if (r.ok)
             addCandidate(candidates, seen, clk, r.params,
-                         QStringLiteral("公式最优 名义%1MHz").arg(clk / 1000000u));
+                         QStringLiteral("公式最优 clk=%1MHz").arg(clk / 1000000u));
     }
 
-    // 2) 枚举每个时钟下所有能整除目标波特率的 Tq 数（含 ZLG 惯例 16 Tq）
+    // 2) 枚举每个时钟下所有能整数命中目标波特率的「每比特总 Tq 数」
     for (quint32 clk : {60000000u, 80000000u, recommended}) {
         if (clk == 0)
             continue;
-        const quint32 canClk = BitTiming::canClockForSdkClock(clk);
-        for (int n = 8; n <= 64; ++n) {
-            const quint64 denom = static_cast<quint64>(targetBps) * static_cast<quint64>(n);
-            if (denom == 0 || (canClk % denom) != 0)
-                continue;
-            const quint64 brp = canClk / denom;
-            if (brp < 1 || brp > 1024)
-                continue;
-            int tseg1 = qRound(samplePoint / 100.0 * n) - 1;
-            tseg1 = qBound(1, tseg1, n - 2);
-            const int tseg2 = n - 1 - tseg1;
-            if (tseg2 < 1)
-                continue;
+        for (int n = 5; n <= 64; ++n) {
             BitTimingParams p;
-            p.brp = static_cast<quint16>(brp);
-            p.tseg1 = static_cast<quint8>(tseg1);
-            p.tseg2 = static_cast<quint8>(tseg2);
-            p.sjw = static_cast<quint8>(qBound(1, qMin(4, tseg2), 127));
-            p.smp = 0;
+            if (!BitTiming::paramsForTq(clk, targetBps, samplePoint, n, &p))
+                continue;
             addCandidate(candidates, seen, clk, p,
-                         QStringLiteral("枚举 Tq=%1").arg(n));
+                         QStringLiteral("枚举总Tq=%1").arg(n));
         }
     }
 
@@ -158,7 +142,7 @@ int main(int argc, char *argv[])
             std::printf("%-4d %-10u %-6u %-5u %-5u %-5u %-8s %-8s %s\n",
                         i + 1, c.clock / 1000000u, c.params.brp, c.params.tseg1, c.params.tseg2,
                         c.params.sjw,
-                        qPrintable(QString::number(BitTiming::actualBps(BitTiming::canClockForSdkClock(c.clock), c.params), 'f', 0)),
+                        qPrintable(QString::number(BitTiming::actualBps(c.clock, c.params), 'f', 0)),
                         qPrintable(QString::number(BitTiming::samplePoint(c.params), 'f', 1)),
                         "InitCAN 失败");
             continue;
@@ -168,7 +152,7 @@ int main(int argc, char *argv[])
             std::printf("%-4d %-10u %-6u %-5u %-5u %-5u %-8s %-8s %s\n",
                         i + 1, c.clock / 1000000u, c.params.brp, c.params.tseg1, c.params.tseg2,
                         c.params.sjw,
-                        qPrintable(QString::number(BitTiming::actualBps(BitTiming::canClockForSdkClock(c.clock), c.params), 'f', 0)),
+                        qPrintable(QString::number(BitTiming::actualBps(c.clock, c.params), 'f', 0)),
                         qPrintable(QString::number(BitTiming::samplePoint(c.params), 'f', 1)),
                         "StartCAN 失败");
             continue;
@@ -218,7 +202,7 @@ int main(int argc, char *argv[])
             std::printf("%-4d %-10u %-6u %-5u %-5u %-5u %-8s %-8s %s\n",
                         i + 1, c.clock / 1000000u, c.params.brp, c.params.tseg1, c.params.tseg2,
                         c.params.sjw,
-                        qPrintable(QString::number(BitTiming::actualBps(BitTiming::canClockForSdkClock(c.clock), c.params), 'f', 0)),
+                        qPrintable(QString::number(BitTiming::actualBps(c.clock, c.params), 'f', 0)),
                         qPrintable(QString::number(BitTiming::samplePoint(c.params), 'f', 1)),
                         "InitCAN/StartCAN 失败");
             continue;
@@ -227,7 +211,7 @@ int main(int argc, char *argv[])
         std::printf("%-4d %-10u %-6u %-5u %-5u %-5u %-8s %-8s %-6d %d/%d%s\n",
                     i + 1, c.clock / 1000000u, c.params.brp, c.params.tseg1, c.params.tseg2,
                     c.params.sjw,
-                    qPrintable(QString::number(BitTiming::actualBps(BitTiming::canClockForSdkClock(c.clock), c.params), 'f', 0)),
+                    qPrintable(QString::number(BitTiming::actualBps(c.clock, c.params), 'f', 0)),
                     qPrintable(QString::number(BitTiming::samplePoint(c.params), 'f', 1)),
                     heard, ack, probes, (ack > 0 || heard > 0) ? "   <= 命中" : "");
         if ((ack > 0 || heard > 0) && winner < 0)
@@ -242,7 +226,7 @@ int main(int argc, char *argv[])
         std::printf("结果：命中候选 #%d —— 时钟 %u MHz, brp=%u tseg1=%u tseg2=%u sjw=%u, 实际 %s bps, 采样点 %s%%\n",
                     heardWinner + 1, c.clock / 1000000u, c.params.brp, c.params.tseg1, c.params.tseg2,
                     c.params.sjw,
-                    qPrintable(QString::number(BitTiming::actualBps(BitTiming::canClockForSdkClock(c.clock), c.params), 'f', 0)),
+                    qPrintable(QString::number(BitTiming::actualBps(c.clock, c.params), 'f', 0)),
                     qPrintable(QString::number(BitTiming::samplePoint(c.params), 'f', 1)));
         std::printf("请在「通道配置」中把控制器时钟设为 %u MHz%s。\n",
                     c.clock / 1000000u,

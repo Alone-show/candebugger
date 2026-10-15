@@ -233,12 +233,12 @@ Rectangle {
 
         // 0=自动，1=60MHz，2=80MHz
         property int clockIndex: 0
-        // 高级：原始位定时覆盖（默认给出实测可用的 250k 参数：brp=12 tseg1=13 tseg2=2）
+        // 高级：原始位定时覆盖（默认给出实测可用的 250k@80MHz 参数：brp=19 tseg1=12 tseg2=1）
         property bool useRaw: false
-        property string rawBrp: "12"
-        property string rawTseg1: "13"
-        property string rawTseg2: "2"
-        property string rawSjw: "2"
+        property string rawBrp: "19"
+        property string rawTseg1: "12"
+        property string rawTseg2: "1"
+        property string rawSjw: "1"
         property string rawSmp: "0"
         property string rawDataBrp: "0"
         property string rawDataTseg1: "0"
@@ -409,9 +409,8 @@ Rectangle {
                     // 走到这里抛 ReferenceError；空前缀用 "" 表达。
                     var prefix = p.calibrated ? qsTr("已标定 · ") : ""
                     return prefix
-                           + qsTr("名义%1MHz(实际%2MHz) · %3 bps · brp=%4 tseg1=%5 tseg2=%6 sjw=%7 · SP %8%")
+                           + qsTr("%1 MHz · %2 bps · brp=%3 tseg1=%4 tseg2=%5 sjw=%6 · SP %7%")
                         .arg(p.clock / 1000000)
-                        .arg(p.canClock / 1000000)
                         // bps 来自 C++ 的 double，QML 的 arg(double) 用 %g(6) 会把 1000000 打成 1e+06
                         .arg(Number(p.arbActualBps).toFixed(0))
                         .arg(p.arbBrp)

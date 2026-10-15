@@ -43,11 +43,10 @@ int main(int argc, char *argv[])
 
     for (int ch = 0; ch < channelCount; ++ch) {
         ChannelConfig cfg;
-        cfg.clock = BitTiming::DefaultClock;   // 名义时钟（下发给 SDK）
-        const quint32 canClk = BitTiming::canClockForSdkClock(cfg.clock);   // 实际时钟（公式用）
+        cfg.clock = BitTiming::DefaultClock;   // clk 即真实时钟（60MHz，V1.01）
 
-        const auto arb = BitTiming::calculate(canClk, 500000, 87.5);
-        const auto dat = BitTiming::calculate(canClk, 2000000, 87.5);
+        const auto arb = BitTiming::calculate(cfg.clock, 500000, 87.5);
+        const auto dat = BitTiming::calculate(cfg.clock, 2000000, 87.5);
         if (!arb.ok || !dat.ok) {
             std::fprintf(stderr, "位定时计算失败\n");
             dev.close();

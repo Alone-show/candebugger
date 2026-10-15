@@ -181,9 +181,8 @@ QString CanDevice::configureChannel(int port, int arbitrationBps, int dataBps,
                      .arg(cal.params.tseg2)
                      .arg(cal.params.sjw);
     } else {
-        // 公式用实际时钟（0.8×名义）；下发给 SDK 的 clk 仍是名义值
-        const quint32 canClk = BitTiming::canClockForSdkClock(clock);
-        const auto r = BitTiming::calculate(canClk, static_cast<quint32>(qMax(1, arbitrationBps)),
+        // 实测标定出的 ZLG 约定：clk 即真实控制器时钟（60M/80M），字段是寄存器值
+        const auto r = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)),
                                             samplePointPercent);
         if (!r.ok)
             return QString();
@@ -191,12 +190,11 @@ QString CanDevice::configureChannel(int port, int arbitrationBps, int dataBps,
         arbMsg = r.message;
     }
 
-    // 数据域：始终用公式（以最终名义时钟换算）
-    const quint32 canClk = BitTiming::canClockForSdkClock(clock);
+    // 数据域：同样用 ZLG 约定（CANFD 加速段）
     BitTimingParams dataParams = arbParams;
     QString dataMsg;
     if (dataBps > 0) {
-        const auto dat = BitTiming::calculate(canClk, static_cast<quint32>(dataBps), samplePointPercent);
+        const auto dat = BitTiming::calculate(clock, static_cast<quint32>(dataBps), samplePointPercent);
         if (!dat.ok)
             return QString();
         dataParams = dat.params;
@@ -276,8 +274,6 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
     QVariantMap out;
     if (clock == 0)
         clock = BitTiming::DefaultClock;
-    // 公式用实际时钟；SDK 用名义时钟
-    quint32 canClk = BitTiming::canClockForSdkClock(clock);
 
     bool calibrated = false;
     BitTimingParams arbParams;
@@ -289,9 +285,8 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
     if (cal.valid) {
         calibrated = true;
         clock = cal.clock;
-        canClk = BitTiming::canClockForSdkClock(clock);
         arbParams = cal.params;
-        arbActual = BitTiming::actualBps(canClk, cal.params);
+        arbActual = BitTiming::actualBps(clock, cal.params);
         arbSp = BitTiming::samplePoint(cal.params);
         arbMessage = QStringLiteral("已标定（%1）brp=%2 tseg1=%3 tseg2=%4 sjw=%5")
                          .arg(cal.source)
@@ -300,7 +295,7 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
                          .arg(cal.params.tseg2)
                          .arg(cal.params.sjw);
     } else {
-        const auto arb = BitTiming::calculate(canClk, static_cast<quint32>(qMax(1, arbitrationBps)),
+        const auto arb = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)),
                                               samplePointPercent);
         arbParams = arb.params;
         arbActual = arb.actualBps;
@@ -311,14 +306,12 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
             out.insert(QStringLiteral("ok"), false);
             out.insert(QStringLiteral("message"), arb.message);
             out.insert(QStringLiteral("clock"), clock);
-            out.insert(QStringLiteral("canClock"), canClk);
             out.insert(QStringLiteral("calibrated"), false);
             return out;
         }
     }
 
     out.insert(QStringLiteral("clock"), clock);
-    out.insert(QStringLiteral("canClock"), canClk);
     out.insert(QStringLiteral("calibrated"), calibrated);
     out.insert(QStringLiteral("arbOk"), true);
     out.insert(QStringLiteral("arbMessage"), arbMessage);
@@ -332,7 +325,7 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
     const bool ok = true;
     QString message = arbMessage;
     if (dataBps > 0) {
-        const auto dat = BitTiming::calculate(canClk, static_cast<quint32>(dataBps), samplePointPercent);
+        const auto dat = BitTiming::calculate(clock, static_cast<quint32>(dataBps), samplePointPercent);
         out.insert(QStringLiteral("dataOk"), dat.ok);
         out.insert(QStringLiteral("dataMessage"), dat.message);
         out.insert(QStringLiteral("dataActualBps"), dat.actualBps);
@@ -354,10 +347,12 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
 
 quint32 CanDevice::recommendedClock() const
 {
-    // 实测（device_bitrate_scan + 外部 ZLG 对端）本机在本卡上以「名义 60MHz / 实际 48MHz」
-    // 与对端 250k 完全对齐（brp=12 tseg1=13 tseg2=2）。名义 80MHz（实际 64MHz）在本卡上
-    // 持续拿不到 ACK，故默认返回 60MHz；80MHz 仍可在界面手动选择。
-    return BitTiming::DefaultClock;
+    // V1.01 硬件时钟 60MHz、V1.03+ 为 80MHz（ZLG 文档）。实测本机（HW=0x0300）
+    // 在 80MHz 下 125k/250k/500k/1M 都能用同一形状（12/1、SP 87.5%）精确命中。
+    std::scoped_lock lk(m_stateMutex);
+    if (!m_info.valid)
+        return BitTiming::DefaultClock;
+    return BitTiming::clockForHardwareVersion(m_info.hwv);
 }
 
 bool CanDevice::startChannel(int port)

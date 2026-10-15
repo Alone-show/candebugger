@@ -10,66 +10,75 @@
 - CMake 3.31.6、g++ 15.2.0、libusb-1.0-0-dev
 - 设备 `3068:0009` 在线；设备节点 `/dev/bus/usb/...` 目前 root 可写，需 udev 规则
 - `libusbcanfd.so` SONAME = `libusbcanfd.so.1.0.15`（仓库内已建同名软链）；`libusb-1.0.so.0` 由系统提供
-- 波特率：标准公式 `baud = clk / (brp * (1 + tseg1 + tseg2))`；**实际以实测标定表为准**（见「风险 30」）
+- 波特率：**ZLG 寄存器约定** `baud = clk / ((brp+1) * (tseg1+tseg2+3))`，字段为寄存器值（有效值−1），
+  `clk` 即真实时钟（V1.01=60MHz / V1.03+=80MHz）；实测标定表可覆盖（见「风险 30」）
 
 ---
 
 ## ⭐ 新会话交接 — 当前状态（2026-10-15）
 
-**本次会话主题**：修「发送失败 / 收不到对端帧」= 位定时（波特率）不匹配。
+**本次会话主题**：把位定时换算**定论**下来 —— 上一会话的「实际时钟 = 0.8 × 名义时钟」近似
+模型**已作废**，改为实测判决出的 **ZLG 寄存器约定**，使 125k/250k/500k/1M 用同一条公式精确命中。
 
-**根因（已定论）**：
-- SDK `ZCAN_INIT.clk` 是**名义时钟**；且 **SDK 会把位定时按标准波特率"取整/查表"**，
-  公式**无法跨速率外推**（500k 下 60M/brp11、80M/brp8、80M/brp15 都能 ACK 8/8）。
-- 原实现按公式硬算 → 参数对不上 → 本机自收自测正常、接外部节点收发失败。
+**根因（已定论，实机判决实验）**：
 
-**解法（已实现并实机验证）**：实测**标定表**优先于公式。
-- `src/core/BitCalibration.{h,cpp}`：QSettings 持久化（`~/.config/CanDebugger/USBCANFD 调试器.conf`）。
-- `CanDevice::configureChannel()` 先查标定表 → 命中用实测参数；否则退回公式，实际时钟 = **0.8×名义**。
-- 内置实测值（已验证）：
-  - **250k → 名义 60MHz，`brp=12 tseg1=13 tseg2=2 sjw=2`**
-  - **500k → 名义 80MHz，`brp=8  tseg1=13 tseg2=2 sjw=2`**
-- 工具：
-  - `./build/device_calibrate <bps> [通道]` —— 实测选参并写入标定表（换速率时用）。
-  - `./build/device_baud_scan [bps] [采样点%] [通道]` —— 标准速率扫描（监听+ACK）。
-  - `./build/device_bitrate_scan [时钟MHz] [通道] [最小] [最大] [监听ms] [探针] [固定tq]` —— 模型无关盲扫。
-- 界面：通道卡显示实际位定时并标注「已标定 / 公式」；原始位定时高级覆盖；发送失败提示区分
-  「总线无应答 / 设备未打开」。
+```
+bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
+采样点(%) = 100 * (tseg1 + 2) / (tseg1 + tseg2 + 3)
+```
 
-**追加修复（QML 报错）**：通道卡「实际位定时」一行在**未标定速率（125 k / 1 M）**下终端报
-`qrc:/qml/DevicePanel.qml: ReferenceError: QString is not defined`。
-- 根因：绑定里写了 C++ 的 `QString()`，QML（V4）没有这个全局对象；该分支只在
-  `p.calibrated === false` 时求值 → 只有 125k / 1M（未标定）触发，250k / 500k 因短路无碍。
-- 加重后果：**QML 绑定一旦抛异常就不再重算**，那一行会永久停留在旧速率（实测卡在 500k）。
-- 修：空前缀用 `""` 表达；并把 `bps` 改为 `Number(p.arbActualBps).toFixed(0)`
-  （`arg(double)` 走 `%g`(6)，会把 1 000 000 打成 `1e+06`）。
-- 回归测试：`tests/qml/tst_panels.qml::test_bitTimingTextForAllRates`，遍历全部
-  仲裁×数据组合并断言文本含**当前**速率；已确认在打回 bug 的版本上会 FAIL。
-  为此加了 `objectName`：通道卡 `channelCard_<n>`、位定时文本 `bitTimingText_<n>`。
+- `brp / tseg1 / tseg2` 都是**寄存器值 = 有效值 − 1**；`clk` 就是**真实控制器时钟**
+  （V1.01 = 60MHz、V1.03+ = 80MHz）。**不存在 0.8× 的"实际时钟"**。
+- 判决实验（对端 125k，`device_bitrate_scan <clk> 0 1 64 120 3 14`，固定形状 tseg1=12/tseg2=1）：
+  - 80MHz：唯一命中 `brp=39`（`80e6/(40×16) = 125000`，ACK 5/5）；60MHz：`brp=29`（ACK 5/5）。
+  - 同速率多档并列 ACK（如 1M 时 60M/80M 各有数档 ACK 6/6）是 SDK 容差范围内正常现象。
+- 4 速率交叉验证（对端切到该速率后 `device_bitrate_scan 80 0 1 64 120 3 14`，全程只有唯一一档命中）：
+
+  | 速率 | brp | tseg1 | tseg2 | 校验 | 实测 |
+  |---|---|---|---|---|---|
+  | 125k | 39 | 12 | 1 | 80e6/(40×16) = 125000 | 有效帧 36，ACK 5/5 |
+  | 250k | 19 | 12 | 1 | 80e6/(20×16) = 250000 | 有效帧 31，ACK 3/3 |
+  | 500k | 9 | 12 | 1 | 80e6/(10×16) = 500000 | 有效帧 25，ACK 3/3 |
+  | 1M | 4 | 12 | 1 | 80e6/(5×16) = 1000000 | 有效帧 15，ACK 3/3 |
+
+- 旁证（ZLG 官方 demo `test.c`，clk=60MHz）：仲裁 `brp5/tseg14/3` → `6×20 = 500k`、
+  数据 `brp1/tseg10/2` → `2×15 = 2M`，两条注释都精确成立。
+- 旧模型为何"看起来对"：0.8× 能凑出 250k（48e6/12/16）与 500k（64e6/8/16），
+  但 125k 会偏 **+6.7%**、1M 会偏 **−16.7%**（超出逐位重同步容差）→ 正是
+  「本机自收自测正常、接外部节点收发失败」的原因。
+
+**本次代码改动**：
+- `src/core/BitTiming.{h,cpp}`：换成上述约定；新增 `paramsForTq()`（按总 Tq 数构造精确参数）、
+  `totalTq()`；**删除** `canClockForSdkClock()`（0.8×）与 `CanClock48M/64M`；
+  参数下限 brp≥1、tseg1/tseg2≥1（不使用 brp=0）；`calculate()` 的 tie-break 改为
+  「总 Tq 数靠近 16 → SJW 更大」。
+- `src/core/CanDevice.cpp`：`configureChannel()`/`bitTimingPreview()` 的仲裁域与数据域
+  都用新约定（clk 直接参与）；`recommendedClock()` 按硬件版本返回（V1.03+ → 80MHz）；
+  `bitTimingPreview()` 去掉 `canClock` 字段。
+- `src/core/BitCalibration.cpp`：内置值改为 4 档实测（80MHz + brp 39/19/9/4，source=实测）；
+  **配置迁移**：`seeded` → `seeded_v2`，首次读取时清掉旧的「内置/实测」条目
+  （保留用户「手工」条目）后用实测值重新播种。
+- `src/qml/DevicePanel.qml`：位定时文本改为
+  `80 MHz · 125000 bps · brp=39 tseg1=12 tseg2=1 sjw=1 · SP 87.5%`；原始位定时默认值更新。
+- 工具：`device_calibrate` 候选改为「总 Tq 数 × 精确整除」，择优 = ACK → 总 Tq=16 标准形状 → 帧数；
+  `device_baud_scan` 用 `paramsForTq` 枚举；`device_smoke`/`device_ts_probe` 去掉 0.8× 用法。
+- 测试：`test_bittiming` 按新约定重写（4 档实测值断言 + ZLG demo 值 + `paramsForTq` 用例）；
+  新增 `test_bitcalibration`（临时 QSettings 目录 + v1→v2 迁移 + 四档自洽断言）。
 
 **验证证据**：
-- `device_calibrate 500000 0` → 选出 80MHz/brp8（31 帧、ACK 8/8）并写表。
-- `device_multichannel_test`（走 `configureChannel` 标定路径，500k）**通过**。
-- `ctest` **13/13 通过**；`QT_QPA_PLATFORM=offscreen ./build/CanDebugger` 无 QML 告警。
-- 125k / 1M 位定时文本实测渲染正常（直接调 `CanDevice::bitTimingPreview()` 复核）：
-  `名义60MHz(实际48MHz) · 125000 bps · brp=24 tseg1=13 tseg2=2 sjw=2 · SP 87.5%`、
-  `名义60MHz(实际48MHz) · 1000000 bps · brp=3 tseg1=13 tseg2=2 sjw=2 · SP 87.5%`。
-- 设备：`USBCANFD-200U HW=0x0300 FW=0x0252`，对端为另一块 ZLG CAN 卡（两条独立总线，
-  对端当前在 ch0 总线；ch1 无对端）。
-
-**工作区状态**：改动**未提交**；已修改 `CMakeLists.txt`、`README.md`、`PROGRESS.md`、
-`src/core/BitTiming.*`、`CanDevice.*`、`DeviceController.*`、`FrameBuilder.cpp`、`src/qml/DevicePanel.qml`、
-`tests/qml/tst_panels.qml`；
-新增 `src/core/BitCalibration.*`、`tests/device_{baud_scan,bitrate_scan,calibrate}.cpp`。
-建议新会话第一步：`cmake --build build -j && ctest --test-dir build` 复现绿灯。
+- `ctest` **14/14 通过**（新增 `bitcalibration`）。
+- `QT_QPA_PLATFORM=offscreen ./build/CanDebugger` 无 QML 告警；用户配置已从 v1
+  （250k=60M/12、500k=80M/8）迁移为 v2（80M + brp 39/19/9/4）。
+- 实机：`device_calibrate 1000000 0 700 6` → 命中 80MHz/`brp=4 tseg1=12 tseg2=1`（ACK 6/6）并写表。
+- 设备：`USBCANFD-200U HW=0x0300 FW=0x0252`，对端为另一块 ZLG CAN 卡（对端在 ch0 总线，ch1 无对端）。
 
 **待办 / 下一步**：
-- [ ] 用 App 在 250k / 500k 复测收发（切「仲裁波特率」+「应用配置」，卡片应显示「已标定」）。
-- [ ] 补标 125k / 1M：对端切到该速率后 `./build/device_calibrate 125000 0`、`... 1000000 0`。
-- [ ] （可选）把「位定时校准」做成 App 内按钮（当前为 CLI 工具，需设备空闲）。
-- [ ] （可选）研究 SDK 的取整/查表规则，做成通用映射，替代逐速率标定。
-- 已知噪声：对端流量**阵发**、`VCI_Transmit` 的 ACK 判据有抖动 → 标定/扫描以 ACK 权重更高。
-  偶发"发送失败"可将发送模式改「单次 / 自发自收」（不等 ACK）。
+- [ ] App 里选 125k / 250k / 500k / 1M →「应用配置」→ 卡片显示「已标定」→ 与对端互发复测。
+- [ ] 数据域（CANFD 加速段）实测复核：80MHz 下公式给 2M→`brp1/tseg16/1`(SP 90%)、
+      4M→`brp1/tseg6/1`(SP 80%)、5M→`brp1/tseg4/1`(SP 75%)。
+- [ ] （可选）把「位定时校准」做成 App 内按钮；把 `device_bitrate_scan` 的判决过程做成 UI 提示。
+- 已知噪声：对端流量**阵发**、`VCI_Transmit` 的 ACK 判据有抖动 → 标定/扫描以 ACK 权重更高，
+  被动有效帧为辅；偶发"发送失败"可将发送模式改「单次 / 自发自收」（不等 ACK）。
 
 ---
 
@@ -313,12 +322,12 @@
 - 发送/回显帧通过 `hdr.inf.tx` 区分；列表可隐藏发送帧
 
 ## 已知风险 / 技术债（新会话必读）
-1. **波特率互操作性（已定位并修复，见风险 30）**：标准公式 `baud=clk/(brp*(1+tseg1+tseg2))` 不变。
-   根因：SDK 的 `clk` 是名义时钟，且 SDK 疑似按标准波特率**取整/查表**——公式外推会得到
-   收不到也发不出的参数（现象：本机自收自测正常、接外部节点失效）。现用**实测标定表**
-   优先（内置 250k/500k），其它速率用 `device_calibrate` 现场标定。
-   注：SDK demo 的 500k/2M 参数与标准公式不自洽（demo：arb brp5/tseg14/3、data brp1/tseg10/2），
-   demo 注释本身不可作为 500k 依据。
+1. **波特率互操作性（已定论并修复，见风险 30）**：SDK 下发位定时的约定是
+   `baud = clk / ((brp+1) * (tseg1+tseg2+3))`（字段=寄存器值=有效值−1，`clk` 即真实时钟），
+   与普通 CAN 教科书的 `clk/(brp*(1+tseg1+tseg2))` 差在"三个字段各自 −1"。早期用 0.8×
+   名义时钟的近似模型只能凑出 250k/500k，125k/1M 会偏 6.7%/16.7%（现象：本机自收自测正常、
+   接外部节点失效）。现公式已精确、四档实测验证；**实测标定表**仍作为覆盖/兜底
+   （`device_calibrate <bps>` 现场标定非标准速率）。
 2. **SDK 线程安全未知 / 锁分层（已重构）**：`libusbcanfd.so` 为预编译二进制，句柄访问
    仍由 `CanDevice` 串行化，但已按数据面/控制面拆锁：
    - `m_rxMutex`：仅 `receive*`（可在阻塞式 `VCI_Receive` 期间长持锁，无人争用）；
@@ -409,24 +418,29 @@
 29. **`Replayer` 生命周期**：构造函数启动常驻发送线程，析构时 join（若正卡在设备发送，退出可能等待
     数秒，与 `RxManager::stop()` 最多阻塞 5s 同类）。发送队列无上限（受文件帧数约束）；
     切换倍速以当前已播放时间重新起算以保持进度连续。
-30. **位定时 / 时钟（已实机标定，标定表机制）**：根因是位定时对不上，且 SDK 的实际分频
-    **无法用公式可靠外推**。
-    - **实测结论**：`ZCAN_INIT.clk` 是名义时钟；更关键的是 **SDK 疑似按标准波特率取整/查表**
-      —— 多个不同 `clk/brp/tq` 组合都能匹配同一速率（如 500k 下 60M/brp11、80M/brp8、
-      80M/brp15 均 ACK 8/8），因此不能用公式外推。
-    - **标定表**：`BitCalibration`（QSettings 持久化，`~/.config/CanDebugger/USBCANFD 调试器.conf`）
-      优先于公式。内置实测值：250k→(名义60MHz, brp12/tseg13/2/sjw2)、
-      500k→(名义80MHz, brp8/tseg13/2/sjw2)。未标定速率退回公式（实际时钟 = 0.8×名义）。
-    - `BitTiming`：`canClockForSdkClock()`（0.8×）、`calculate()` 增 `preferredTq`
-      （误差相同时择优 `sjw>=2`、`Tq≈16`）。
+30. **位定时 / 时钟（已定论，2026-10-15 实机判决 + 4 速率交叉验证）**：
+    - **约定**（ZLG 寄存器约定，已验证）：`bps = clk / ((brp+1) * (tseg1+tseg2+3))`、
+      采样点 `= (tseg1+2)/(tseg1+tseg2+3)`。三个字段都是**寄存器值 = 有效值 − 1**；
+      `clk` 即真实控制器时钟（V1.01=60MHz、V1.03+=80MHz），**没有"0.8× 实际时钟"**。
+    - **证据**：对端 125k 时 `device_bitrate_scan 80 0 1 64 120 3 14` 唯一命中 `brp=39`
+      （`80e6/(40*16)=125000`，ACK 5/5）；60MHz 下 `brp=29`（ACK 5/5）。80MHz 交叉验证四档：
+      125k→39、250k→19、500k→9、1M→4（形状 tseg1=12/tseg2=1、SP 87.5%），ACK 3/3~5/5。
+      旁证：ZLG 官方 demo（clk=60MHz）仲裁 `5/14/3`→`6*20=500k`、数据 `1/10/2`→`2*15=2M`。
+    - **同一速率多档并列 ACK 属正常**（SDK 容差内），以「总 Tq=16、SP 87.5%」的标准形状为准。
+    - `BitTiming`：`calculate()` / `paramsForTq()` / `totalTq()`；`clockForHardwareVersion()`
+      按硬件版本给 60/80MHz；已删除 `canClockForSdkClock()`（0.8×）。
+    - `BitCalibration`：QSettings 持久化（`~/.config/CanDebugger/USBCANFD 调试器.conf`），
+      **优先于公式**。内置实测值 = 80MHz + brp 39/19/9/4（125k/250k/500k/1M）。
+      配置迁移：`seeded` → `seeded_v2`（旧的 0.8× 模型条目会被清除后重新播种，「手工」条目保留）。
     - `CanDevice`：`configureChannel()` 先查标定表、否则公式；`configureChannelRaw()`（原始覆盖）、
-      `bitTimingPreview()`（含 `calibrated` 与 `source`）、`recommendedClock`。
+      `bitTimingPreview()`（含 `calibrated` 与 `source`）、`recommendedClock()`（V1.03+ → 80MHz）。
     - `DeviceController`：读取 `clock`/`useRaw`，`configReport` 暴露实际应用的位定时。
-    - `DevicePanel`：时钟下拉、原始位定时、每卡显示实际位定时并标注「已标定/公式」。
-    - 发送失败提示区分「总线无应答」与「设备未打开」。
-    - 诊断/标定工具：`device_baud_scan`、`device_bitrate_scan`（模型无关盲扫）、
-      `device_calibrate <bps>`（实测并写入标定表）。
-    - 单测：`test_bittiming` 增 48/64MHz 标定、名义→实际换算、稳健性用例。
+    - `DevicePanel`：时钟下拉（自动 / 60MHz / 80MHz）、原始位定时、每卡显示实际位定时并标注
+      「已标定 / 公式」；发送失败提示区分「总线无应答」与「设备未打开」。
+    - 诊断/标定工具：`device_baud_scan`、`device_bitrate_scan`（模型无关盲扫，用于判决真实时钟）、
+      `device_calibrate <bps>`（实测并写入标定表，择优 = ACK → 总 Tq=16 → 帧数）。
+    - 单测：`test_bittiming`（新约定 + 实测值 + demo 值）、`test_bitcalibration`（播种 + 迁移）。
     - **注意事项**：对端流量阵发、`VCI_Transmit` 的 ACK 判据有抖动，标定/扫描以 ACK 权重更高、
-      被动有效帧为辅；换其它速率请用 `device_calibrate` 现场标定。
+      被动有效帧为辅；总线上的对端速率与本机不一致时，本机可能进入错误态导致发送失败
+      （如对端 1M、本机 500k 时 `device_multichannel_test` 的 ch0 会失败）。
 

@@ -1,12 +1,12 @@
 // 位定时标定工具：对给定波特率实测出可用参数并写入标定表（与 App 共用 QSettings）
 //
-// SDK 的实际分频不能可靠地用公式外推（实测 250k 与 500k 落在不同名义时钟档，
-// 且 brp*tq 相同的组合表现不同），故用实测方式标定。
+// 公式（ZLG 约定）已在 60M/80M 下能精确算出 125k~1M，故本工具主要给
+//   非标准速率 / 特殊硬件 / 想复核现有参数 的场合用。
 //
 // 用法（需实机 + 对端在总线上持续发送）：
 //   ./build/device_calibrate <目标bps> [通道] [每个候选监听ms] [探针次数]
 //   例： ./build/device_calibrate 250000 0
-//        ./build/device_calibrate 500000 0
+//        ./build/device_calibrate 125000 0
 //
 // 评分：拿到 ACK 权重最高（逐帧二值、受对端阵发影响小），其次是被动收到的有效帧数。
 // 选出的参数会写入标定表；App 中该波特率即优先使用标定值（界面显示"已标定"）。
@@ -76,73 +76,72 @@ int main(int argc, char *argv[])
     QList<Cand> results;
 
     const quint32 clocks[] = {60000000u, 80000000u};
-    const int tqs[] = {16, 12, 20, 8, 24};
+    // 每比特总 Tq 数候选（= tseg1+tseg2+3）：8/16/24/32/40 是 SP=87.5% 的
+    // ZLG/CiA 常用形状，其余覆盖其它常用采样点（高波特率数据域等）。
+    // 只枚举能整数命中目标波特率的组合（paramsForTq 内部判断）。
+    const int totalTqs[] = {8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 38, 40};
 
     for (quint32 clk : clocks) {
-        const quint32 canClk = BitTiming::canClockForSdkClock(clk);
-        for (int tq : tqs) {
-            const int est = qMax(1, static_cast<int>(canClk / (static_cast<quint64>(bps) * tq)));
-            for (int brp = qMax(1, est - 2); brp <= est + 2; ++brp) {
-                int tseg2 = qMax(1, tq / 8);
-                int tseg1 = tq - 1 - tseg2;
-                if (tseg1 < 1 || tseg1 > 255 || tseg2 < 1 || tseg2 > 255)
-                    continue;
+        for (int totalTq : totalTqs) {
+            BitTimingParams p;
+            if (!BitTiming::paramsForTq(clk, bps, 87.5, totalTq, &p))
+                continue;
 
-                dev.resetChannel(static_cast<quint32>(channel));
-                ChannelConfig cfg;
-                cfg.clock = clk;
-                cfg.mode = 0;
-                cfg.arbitration.brp = static_cast<quint16>(brp);
-                cfg.arbitration.tseg1 = static_cast<quint8>(tseg1);
-                cfg.arbitration.tseg2 = static_cast<quint8>(tseg2);
-                cfg.arbitration.sjw = static_cast<quint8>(qMin(4, tseg2));
-                cfg.arbitration.smp = 0;
-                cfg.data = cfg.arbitration;
-                if (!dev.initChannel(static_cast<quint32>(channel), cfg))
-                    continue;
-                if (!dev.startChannel(static_cast<quint32>(channel)))
-                    continue;
+            dev.resetChannel(static_cast<quint32>(channel));
+            ChannelConfig cfg;
+            cfg.clock = clk;
+            cfg.mode = 0;
+            cfg.arbitration = p;
+            cfg.data = cfg.arbitration;
+            if (!dev.initChannel(static_cast<quint32>(channel), cfg))
+                continue;
+            if (!dev.startChannel(static_cast<quint32>(channel)))
+                continue;
 
-                int frames = 0;
-                ZCAN_20_MSG canBuf[32];
-                ZCAN_FD_MSG fdBuf[32];
-                QElapsedTimer lt;
-                lt.start();
-                while (lt.elapsed() < listenMs) {
-                    const int rc = dev.receiveCan(static_cast<quint32>(channel), canBuf, 32, 5);
-                    for (int k = 0; k < rc; ++k)
-                        if (!canBuf[k].hdr.inf.err)
-                            ++frames;
-                    const int rf = dev.receiveFd(static_cast<quint32>(channel), fdBuf, 32, 5);
-                    for (int k = 0; k < rf; ++k)
-                        if (!fdBuf[k].hdr.inf.err)
-                            ++frames;
-                }
+            int frames = 0;
+            ZCAN_20_MSG canBuf[32];
+            ZCAN_FD_MSG fdBuf[32];
+            QElapsedTimer lt;
+            lt.start();
+            while (lt.elapsed() < listenMs) {
+                const int rc = dev.receiveCan(static_cast<quint32>(channel), canBuf, 32, 5);
+                for (int k = 0; k < rc; ++k)
+                    if (!canBuf[k].hdr.inf.err)
+                        ++frames;
+                const int rf = dev.receiveFd(static_cast<quint32>(channel), fdBuf, 32, 5);
+                for (int k = 0; k < rf; ++k)
+                    if (!fdBuf[k].hdr.inf.err)
+                        ++frames;
+            }
 
-                int ack = 0;
-                for (int k = 0; k < probes; ++k) {
-                    ZCAN_20_MSG tx;
-                    buildProbe(&tx, 0x7E0u, static_cast<quint32>(channel));
-                    if (dev.transmitCan(static_cast<quint32>(channel), tx))
-                        ++ack;
-                    QCoreApplication::processEvents();
-                }
+            int ack = 0;
+            for (int k = 0; k < probes; ++k) {
+                ZCAN_20_MSG tx;
+                buildProbe(&tx, 0x7E0u, static_cast<quint32>(channel));
+                if (dev.transmitCan(static_cast<quint32>(channel), tx))
+                    ++ack;
+                QCoreApplication::processEvents();
+            }
 
-                Cand c;
-                c.clock = clk;
-                c.brp = brp;
-                c.params = cfg.arbitration;
-                c.frames = frames;
-                c.ack = ack;
-                c.score = ack * 50 + frames;   // ACK 权重更高
-                results.append(c);
+            Cand c;
+            c.clock = clk;
+            c.brp = p.brp;
+            c.params = cfg.arbitration;
+            c.frames = frames;
+            c.ack = ack;
+            // 择优顺序：ACK 优先（逐帧二值、受对端阵发影响小）
+            //   → 其次偏好总 Tq=16 的 CiA/ZLG 标准形状（与内置实测值一致，结果确定）
+            //   → 最后才看被动收到的有效帧数（受对端阵发影响大，仅作参考）
+            c.score = ack * 1000
+                      + (BitTiming::totalTq(p) == 16 ? 100 : 0)
+                      + qMin(frames, 99);
+            results.append(c);
 
-                if (ack > 0 || frames > 0) {
-                    std::printf("  候选 名义%uMHz brp=%-4d tseg1=%-4d tseg2=%-3d "
-                                "有效帧=%-5d ACK=%d/%d\n",
-                                clk / 1000000u, brp, tseg1, tseg2, frames, ack, probes);
-                    std::fflush(stdout);
-                }
+            if (ack > 0 || frames > 0) {
+                std::printf("  候选 clk=%uMHz brp=%-4d tseg1=%-4d tseg2=%-3d "
+                            "有效帧=%-5d ACK=%d/%d\n",
+                            clk / 1000000u, p.brp, p.tseg1, p.tseg2, frames, ack, probes);
+                std::fflush(stdout);
             }
         }
     }
@@ -164,7 +163,7 @@ int main(int argc, char *argv[])
     }
 
     const Cand &b = results.at(bestIdx);
-    std::printf("\n最佳：名义 %u MHz，brp=%d tseg1=%d tseg2=%d sjw=%d（有效帧 %d，ACK %d/%d）\n",
+    std::printf("\n最佳：clk=%u MHz，brp=%d tseg1=%d tseg2=%d sjw=%d（有效帧 %d，ACK %d/%d）\n",
                 b.clock / 1000000u, b.brp, b.params.tseg1, b.params.tseg2, b.params.sjw,
                 b.frames, b.ack, probes);
     BitCalibration::instance().set(static_cast<int>(bps), b.clock, b.params, QStringLiteral("实测"));

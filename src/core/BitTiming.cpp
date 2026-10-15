@@ -4,6 +4,13 @@
 
 namespace {
 
+// 每比特总 Tq 数的下限：1(sync) + 1(tseg1) + 1(tseg2) 的最小合法组合
+constexpr int kMinTotalTq = 5;
+// brp 字段（寄存器值）范围：有效分频 = brp + 1。下限取 2 而非 1，
+// 即不使用 brp=0（部分固件不接受；60/80MHz 下 5Mbps 以内总存在 brp>=1 的解）。
+constexpr quint64 kMinBrpDiv = 2;
+constexpr quint64 kMaxBrpDiv = 1025;
+
 QString makeMessage(quint32 clk, quint32 bps, const BitTimingParams &p, bool exact, double bpsValue, double sp)
 {
     const QString detail = QStringLiteral("brp=%1 tseg1=%2 tseg2=%3 sjw=%4 smp=%5")
@@ -23,14 +30,39 @@ QString makeMessage(quint32 clk, quint32 bps, const BitTimingParams &p, bool exa
 
 quint32 BitTiming::clockForHardwareVersion(quint16 hwv)
 {
-    // SDK 说明：V1.01 名义时钟 60MHz，V1.03 及以上 80MHz
+    // SDK 说明：V1.01 时钟 60MHz，V1.03 及以上 80MHz
     return hwv >= HwV1_03 ? Clock80M : DefaultClock;
 }
 
-quint32 BitTiming::canClockForSdkClock(quint32 sdkClk)
+bool BitTiming::paramsForTq(quint32 clk, quint32 bps, double samplePointPercent,
+                           int totalTq, BitTimingParams *out)
 {
-    // 实测：实际 CAN 控制器时钟 = 0.8 × 名义时钟（48MHz / 64MHz）
-    return static_cast<quint32>((static_cast<quint64>(sdkClk) * 4ull) / 5ull);
+    if (!out || bps == 0 || clk == 0)
+        return false;
+    if (totalTq < kMinTotalTq)
+        return false;
+
+    const quint64 denom = static_cast<quint64>(bps) * static_cast<quint64>(totalTq);
+    if (denom == 0 || (clk % denom) != 0)
+        return false;
+
+    const quint64 brpDiv = clk / denom;      // = brp + 1
+    if (brpDiv < kMinBrpDiv || brpDiv > kMaxBrpDiv)
+        return false;
+
+    const double target = qBound(0.50, samplePointPercent / 100.0, 0.95);
+    int tseg1 = qRound(target * totalTq) - 2;
+    tseg1 = qBound(1, tseg1, totalTq - 4);   // 保证 tseg2 >= 1
+    const int tseg2 = totalTq - 3 - tseg1;
+    if (tseg2 < 1)
+        return false;
+
+    out->brp = static_cast<quint16>(brpDiv - 1);
+    out->tseg1 = static_cast<quint8>(tseg1);
+    out->tseg2 = static_cast<quint8>(tseg2);
+    out->sjw = static_cast<quint8>(qMin(4, tseg2));
+    out->smp = 0;
+    return true;
 }
 
 BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePointPercent,
@@ -42,48 +74,49 @@ BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePoin
         result.message = QStringLiteral("时钟或波特率无效");
         return result;
     }
-    if (maxTq < 8)
-        maxTq = 8;
+    if (maxTq < kMinTotalTq)
+        maxTq = kMinTotalTq;
     if (maxTq > 255)
         maxTq = 255;
-    if (preferredTq < 8)
-        preferredTq = 8;
+    if (preferredTq < kMinTotalTq)
+        preferredTq = kMinTotalTq;
 
     const double target = qBound(0.50, samplePointPercent / 100.0, 0.95);
 
     bool found = false;
     double bestErr = 1e9;
-    bool bestRobust = false;      // sjw >= 2 视为稳健配置
     int bestTqDist = 0;
+    int bestSjw = 0;
     BitTimingParams bestParams;
 
     for (int pass = 0; pass < 2 && !found; ++pass) {
         const bool exactOnly = (pass == 0);
-        for (int n = 8; n <= maxTq; ++n) {
-            const quint64 denom = static_cast<quint64>(bps) * static_cast<quint64>(n);
-            if (exactOnly && (clk % denom) != 0)
-                continue;
-
-            quint64 brp = clk / denom;
-            if (!exactOnly) {
-                const double brpApprox = static_cast<double>(clk) / static_cast<double>(denom);
-                brp = static_cast<quint64>(qRound(brpApprox));
-            }
-            if (brp < 1 || brp > 1024)
-                continue;
-
-            int tseg1 = qRound(target * n) - 1;
-            tseg1 = qBound(1, tseg1, n - 2);
-            const int tseg2 = n - 1 - tseg1;
-            if (tseg2 < 1)
-                continue;
-
+        for (int n = kMinTotalTq; n <= maxTq; ++n) {
             BitTimingParams p;
-            p.brp = static_cast<quint16>(brp);
-            p.tseg1 = static_cast<quint8>(tseg1);
-            p.tseg2 = static_cast<quint8>(tseg2);
-            p.sjw = static_cast<quint8>(qBound(1, qMin(4, tseg2), 127));
-            p.smp = 0;
+            if (exactOnly) {
+                // 精确匹配：clk 必须能被 bps * n 整除
+                if (!paramsForTq(clk, bps, samplePointPercent, n, &p))
+                    continue;
+            } else {
+                // 近似回退：brp 取最近整数，采样点仍按目标求解
+                const quint64 denom = static_cast<quint64>(bps) * static_cast<quint64>(n);
+                if (denom == 0)
+                    continue;
+                const quint64 brpDiv =
+                    static_cast<quint64>(qRound(static_cast<double>(clk) / static_cast<double>(denom)));
+                if (brpDiv < kMinBrpDiv || brpDiv > kMaxBrpDiv)
+                    continue;
+                int tseg1 = qRound(target * n) - 2;
+                tseg1 = qBound(1, tseg1, n - 4);
+                const int tseg2 = n - 3 - tseg1;
+                if (tseg2 < 1)
+                    continue;
+                p.brp = static_cast<quint16>(brpDiv - 1);
+                p.tseg1 = static_cast<quint8>(tseg1);
+                p.tseg2 = static_cast<quint8>(tseg2);
+                p.sjw = static_cast<quint8>(qMin(4, tseg2));
+                p.smp = 0;
+            }
 
             const double actual = actualBps(clk, p);
             const double baudErr = qAbs(actual - static_cast<double>(bps)) / static_cast<double>(bps);
@@ -93,9 +126,9 @@ BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePoin
             const double score = baudErr * 100.0 + spErr;
 
             // 仅在误差相同时用稳健性/Tq 数做 tie-break：
-            // 1) 优先 sjw >= 2（抗抖动）；2) 其次 Tq 数接近 preferredTq（经典 CAN 约 16）
-            const bool robust = (p.sjw >= 2);
+            // 1) 优先总 Tq 数接近 preferredTq（经典 CAN/ZLG 惯例 16）；2) 其次 SJW 更大
             const int tqDist = qAbs(n - preferredTq);
+            const int sjw = p.sjw;
 
             constexpr double kEps = 1e-9;
             bool better = false;
@@ -104,17 +137,17 @@ BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePoin
             } else if (score < bestErr - kEps) {
                 better = true;
             } else if (score <= bestErr + kEps) {
-                if (robust != bestRobust)
-                    better = robust;
-                else if (tqDist < bestTqDist)
-                    better = true;
+                if (tqDist != bestTqDist)
+                    better = (tqDist < bestTqDist);
+                else if (sjw != bestSjw)
+                    better = (sjw > bestSjw);
             }
 
             if (better) {
                 found = true;
                 bestErr = score;
-                bestRobust = robust;
                 bestTqDist = tqDist;
+                bestSjw = sjw;
                 bestParams = p;
                 result.exact = exactOnly;
             }
@@ -137,18 +170,19 @@ BitTimingResult BitTiming::calculate(quint32 clk, quint32 bps, double samplePoin
 
 double BitTiming::actualBps(quint32 clk, const BitTimingParams &p)
 {
-    if (p.brp == 0)
+    const int n = totalTq(p);
+    if (n <= 0)
         return 0.0;
-    const int totalTq = 1 + p.tseg1 + p.tseg2;
-    if (totalTq <= 0)
+    const quint64 div = static_cast<quint64>(p.brp + 1) * static_cast<quint64>(n);
+    if (div == 0)
         return 0.0;
-    return static_cast<double>(clk) / (static_cast<double>(p.brp) * totalTq);
+    return static_cast<double>(clk) / static_cast<double>(div);
 }
 
 double BitTiming::samplePoint(const BitTimingParams &p)
 {
-    const int totalTq = 1 + p.tseg1 + p.tseg2;
-    if (totalTq <= 0)
+    const int n = totalTq(p);
+    if (n <= 0)
         return 0.0;
-    return 100.0 * (1 + p.tseg1) / totalTq;
+    return 100.0 * (p.tseg1 + 2) / n;
 }

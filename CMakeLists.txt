@@ -159,6 +159,10 @@ if(CANDBG_BUILD_TESTS)
         add_executable(test_ring_concurrency tests/test_ring_concurrency.cpp)
         target_link_libraries(test_ring_concurrency PRIVATE candbg_core Qt5::Test)
         add_test(NAME ring_concurrency COMMAND test_ring_concurrency)
+
+        add_executable(test_bitcalibration tests/test_bitcalibration.cpp)
+        target_link_libraries(test_bitcalibration PRIVATE candbg_core Qt5::Test)
+        add_test(NAME bitcalibration COMMAND test_bitcalibration)
     endif()
 
     # ---- QML 组件测试（QtQuickTest + offscreen） ----

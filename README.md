@@ -110,7 +110,8 @@ ui/CanDebugger/
 │            components/ (AppButton, AppCard, AppCheckBox, AppComboBox,
 │            AppRadioButton, AppTextField, ChannelBadge, Icon, MetricCard,
 │            SectionHeader, SlimScrollBar, StatusDot, ToolbarButton)
-├─ tests/  单元：test_bittiming, test_buffer_model, test_framebuilder,
+├─ tests/  单元：test_bittiming, test_bitcalibration, test_buffer_model,
+│          test_framebuilder, test_periodicsender, test_canfilter, test_statistics,
 │          test_periodicsender, test_canfilter, test_statistics, test_plotring,
 │          test_recorder, test_replayer, test_filter_proxy, test_framelist_roles,
 │          test_ring_concurrency；QML：qml/tst_{qml.cpp,panels,runtime}；
@@ -123,14 +124,27 @@ ui/CanDebugger/
 ```
 
 ## 位定时说明（重要）
-标准公式：`baud = clk / (brp * (1 + tseg1 + tseg2))`。
-- **实测标定（关键）**：SDK 的 `ZCAN_INIT.clk` 是**名义时钟**，而且 SDK 的实际分频
-  **不能可靠地用公式外推**（实测多个不同 `clk/brp/tq` 组合都能匹配同一速率，疑似按标准
-  波特率取整/查表）。因此对**已验证过的速率**使用「标定表」里的实测参数，优先于公式：
-  - 250k → 名义 60MHz，`brp=12 tseg1=13 tseg2=2 sjw=2`（内置，实测）
-  - 500k → 名义 80MHz，`brp=8  tseg1=13 tseg2=2 sjw=2`（内置，实测）
-  - 其它速率未标定时退回标准公式（实际时钟 = 0.8×名义）。
-- 每张通道卡显示**实际使用的位定时**，并标注「已标定 / 公式」；连接与「应用配置」
+**实测标定出的 ZLG 寄存器约定**（已实机判决 + 4 速率交叉验证）：
+
+```
+baud      = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
+采样点(%) = 100 * (tseg1 + 2) / (tseg1 + tseg2 + 3)
+```
+
+- `brp / tseg1 / tseg2` 都是**寄存器值 = 有效值 − 1**（SDK 各自 +1）；`clk` 就是
+  **真实控制器时钟**：V1.01 = 60MHz、V1.03+ = 80MHz（界面「自动」按硬件版本推断）。
+- 内置实测值（USBCANFD-200U HW=0x0300，80MHz + 形状 `tseg1=12 tseg2=1`、SP 87.5%）：
+
+  | 速率 | brp | tseg1 | tseg2 | 实测 |
+  |---|---|---|---|---|
+  | 125k | 39 | 12 | 1 | ACK 5/5 |
+  | 250k | 19 | 12 | 1 | ACK 3/3 |
+  | 500k | 9 | 12 | 1 | ACK 3/3 |
+  | 1M | 4 | 12 | 1 | ACK 3/3 |
+
+- 「标定表」（`BitCalibration`，QSettings）**优先于公式**，用于固定实测值/现场标定/手工覆盖；
+  未标定的速率直接用公式（公式在 60/80MHz 下已能精确算出 125k~5M）。
+- 每张通道卡显示**实际使用的位定时**并标注「已标定 / 公式」；连接与「应用配置」
   后的实际参数显示在左栏底部。
 - 标定表持久化在 `~/.config/CanDebugger/USBCANFD 调试器.conf`（QSettings）。
 - **新增速率标定**：`./build/device_calibrate <bps> [通道]`（需实机 + 对端在该速率上发送），
@@ -150,7 +164,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ctest --test-dir build --output-on-failure      # bittiming/buffer_model/framebuilder/
                                                 # periodicsender/canfilter/statistics/plotring/
                                                 # recorder/replayer/filter_proxy/
-                                                # framelist_roles/ring_concurrency/qml
+                                                # framelist_roles/ring_concurrency/
+                                                # bitcalibration/qml
 
 # L4/L5 健壮性与覆盖率（脚本封装）
 scripts/run_all_tests.sh release                # 纯逻辑 + QML
@@ -174,8 +189,8 @@ scripts/run_hw_tests.sh
 ./build/device_replay_test        # 记录→回放 ASC/CSV 回环
 ./build/device_stress_test        # ~1000fps 压力与内存
 ./build/device_baud_scan 250000   # 位定时扫描（标准速率 + 监听/ACK）
-./build/device_bitrate_scan       # 模型无关朴素扫描（未知时钟/速率定位）
-./build/device_calibrate 500000   # 实测标定并写入标定表（App 共用）
+./build/device_bitrate_scan       # 模型无关朴素扫描（未知时钟/速率定位真实分频）
+./build/device_calibrate 125000   # 实测标定并写入标定表（App 共用）
 ```
 
 
