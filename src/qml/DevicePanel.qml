@@ -405,13 +405,11 @@ Rectangle {
                     var p = card.preview
                     if (!p.ok)
                         return qsTr("位定时无解（检查时钟与波特率）")
-                    // 注意：QML 运行时没有 QString，未标定速率（如 125k / 1M）会因短路求值
-                    // 走到这里抛 ReferenceError；空前缀用 "" 表达。
-                    var prefix = p.calibrated ? qsTr("已标定 · ") : ""
-                    return prefix
-                           + qsTr("%1 MHz · %2 bps · brp=%3 tseg1=%4 tseg2=%5 sjw=%6 · SP %7%")
+                    // 注意：QML 运行时没有 QString，空前缀用 "" 表达（历史上写 QString() 会抛
+                    // ReferenceError，绑定一旦抛异常就不再重算、文本会永久停在上一个速率）。
+                    // bps 来自 C++ 的 double，QML 的 arg(double) 用 %g(6) 会把 1000000 打成 1e+06。
+                    return qsTr("%1 MHz · %2 bps · brp=%3 tseg1=%4 tseg2=%5 sjw=%6 · SP %7%")
                         .arg(p.clock / 1000000)
-                        // bps 来自 C++ 的 double，QML 的 arg(double) 用 %g(6) 会把 1000000 打成 1e+06
                         .arg(Number(p.arbActualBps).toFixed(0))
                         .arg(p.arbBrp)
                         .arg(p.arbTseg1)

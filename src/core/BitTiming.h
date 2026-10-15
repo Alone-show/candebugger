@@ -66,7 +66,7 @@ public:
 
     // 由「每比特总 Tq 数」构造一组精确参数：要求 clk 能被 bps*totalTq 整除，
     // 且 brp 字段 >= 1（不使用 brp=0）、tseg1/tseg2 >= 1。
-    // 供扫描/标定工具枚举候选，避免各处重复实现约定。
+    // 供扫描/诊断工具枚举候选，避免各处重复实现约定。
     static bool paramsForTq(quint32 clk, quint32 bps, double samplePointPercent,
                             int totalTq, BitTimingParams *out);
 

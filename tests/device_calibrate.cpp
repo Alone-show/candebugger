@@ -1,15 +1,15 @@
-// 位定时标定工具：对给定波特率实测出可用参数并写入标定表（与 App 共用 QSettings）
+// 位定时实测诊断工具：对给定波特率实测出可用参数并打印（不落盘）
 //
-// 公式（ZLG 约定）已在 60M/80M 下能精确算出 125k~1M，故本工具主要给
-//   非标准速率 / 特殊硬件 / 想复核现有参数 的场合用。
+// 用途：公式（ZLG 寄存器约定）在 60M/80M 下已能精确算出标准速率，
+//   本工具用于**非标准速率 / 想现场复核** 的场合：实测哪组参数真的能通，
+//   结果可直接填到界面「原始位定时（高级，覆盖公式）」里。
 //
 // 用法（需实机 + 对端在总线上持续发送）：
 //   ./build/device_calibrate <目标bps> [通道] [每个候选监听ms] [探针次数]
 //   例： ./build/device_calibrate 250000 0
 //        ./build/device_calibrate 125000 0
 //
-// 评分：拿到 ACK 权重最高（逐帧二值、受对端阵发影响小），其次是被动收到的有效帧数。
-// 选出的参数会写入标定表；App 中该波特率即优先使用标定值（界面显示"已标定"）。
+// 评分：ACK 权重最高（逐帧二值、受对端阵发影响小）→ 总 Tq=16 标准形状 → 被动收到的有效帧数。
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QString>
@@ -18,7 +18,6 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "core/BitCalibration.h"
 #include "core/BitTiming.h"
 #include "core/CanDevice.h"
 
@@ -43,8 +42,6 @@ void buildProbe(ZCAN_20_MSG *msg, quint32 id, quint32 chn)
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
-    QCoreApplication::setOrganizationName(QStringLiteral("CanDebugger"));
-    QCoreApplication::setApplicationName(QStringLiteral("USBCANFD 调试器"));
 
     const quint32 bps = argc > 1 ? static_cast<quint32>(QString(argv[1]).toUInt()) : 250000u;
     const int channel = argc > 2 ? QString(argv[2]).toInt() : 0;
@@ -59,7 +56,7 @@ int main(int argc, char *argv[])
     const CanDeviceInfo info = dev.deviceInfo();
     std::printf("设备: %s HW=0x%04x FW=0x%04x 通道=%u\n",
                 qPrintable(info.id), info.hwv, info.fwv, info.channels);
-    std::printf("标定目标 %u bps，通道 %d（监听 %dms，探针 %d 次）\n\n",
+    std::printf("实测目标 %u bps，通道 %d（监听 %dms，探针 %d 次）\n\n",
                 bps, channel, listenMs, probes);
 
     dev.setTerminalResistor(static_cast<quint32>(channel), true);
@@ -130,11 +127,11 @@ int main(int argc, char *argv[])
             c.frames = frames;
             c.ack = ack;
             // 择优顺序：ACK 优先（逐帧二值、受对端阵发影响小）
-            //   → 其次偏好总 Tq=16 的 CiA/ZLG 标准形状（与内置实测值一致，结果确定）
+            //   → 其次偏好总 Tq=16 的 CiA/ZLG 标准形状（结果确定）
             //   → 最后才看被动收到的有效帧数（受对端阵发影响大，仅作参考）
-            c.score = ack * 1000
-                      + (BitTiming::totalTq(p) == 16 ? 100 : 0)
-                      + qMin(frames, 99);
+            // 注意：零命中的候选必须得 0 分，否则"总 Tq=16"加分会让它被误选。
+            const int hits = ack * 1000 + qMin(frames, 99);
+            c.score = hits > 0 ? (hits + (BitTiming::totalTq(p) == 16 ? 100 : 0)) : 0;
             results.append(c);
 
             if (ack > 0 || frames > 0) {
@@ -163,11 +160,15 @@ int main(int argc, char *argv[])
     }
 
     const Cand &b = results.at(bestIdx);
-    std::printf("\n最佳：clk=%u MHz，brp=%d tseg1=%d tseg2=%d sjw=%d（有效帧 %d，ACK %d/%d）\n",
+    const double actual = BitTiming::actualBps(b.clock, b.params);
+    const double sp = BitTiming::samplePoint(b.params);
+    std::printf("\n实测可用：clk=%u MHz，brp=%d tseg1=%d tseg2=%d sjw=%d"
+                "（%u bps 实际 %.0f bps，SP %.1f%%；有效帧 %d，ACK %d/%d）\n",
                 b.clock / 1000000u, b.brp, b.params.tseg1, b.params.tseg2, b.params.sjw,
-                b.frames, b.ack, probes);
-    BitCalibration::instance().set(static_cast<int>(bps), b.clock, b.params, QStringLiteral("实测"));
-    std::printf("已写入标定表（%u bps）。App 中该波特率将优先使用此标定值。\n", bps);
+                bps, actual, sp, b.frames, b.ack, probes);
+    std::printf("如需固定使用：在通道卡勾选「原始位定时（高级，覆盖公式）」，"
+                "填入 clk=%u MHz / 仲裁 brp=%d tseg1=%d tseg2=%d sjw=%d。\n",
+                b.clock / 1000000u, b.brp, b.params.tseg1, b.params.tseg2, b.params.sjw);
 
     dev.resetChannel(static_cast<quint32>(channel));
     dev.close();

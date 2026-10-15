@@ -35,8 +35,6 @@ endif()
 add_library(candbg_core STATIC
     src/core/AsyncExecutor.cpp
     src/core/AsyncExecutor.h
-    src/core/BitCalibration.cpp
-    src/core/BitCalibration.h
     src/core/BitTiming.cpp
     src/core/BitTiming.h
     src/core/CanDevice.cpp
@@ -159,10 +157,6 @@ if(CANDBG_BUILD_TESTS)
         add_executable(test_ring_concurrency tests/test_ring_concurrency.cpp)
         target_link_libraries(test_ring_concurrency PRIVATE candbg_core Qt5::Test)
         add_test(NAME ring_concurrency COMMAND test_ring_concurrency)
-
-        add_executable(test_bitcalibration tests/test_bitcalibration.cpp)
-        target_link_libraries(test_bitcalibration PRIVATE candbg_core Qt5::Test)
-        add_test(NAME bitcalibration COMMAND test_bitcalibration)
     endif()
 
     # ---- QML 组件测试（QtQuickTest + offscreen） ----
@@ -244,7 +238,7 @@ if(CANDBG_BUILD_TESTS)
         INSTALL_RPATH "$ORIGIN/lib"
     )
 
-    # 位定时标定：实测可用参数并写入标定表（与 App 共用 QSettings）
+    # 位定时实测诊断：打印实测可用参数（不落盘；可填到界面「原始位定时」覆盖）
     add_executable(device_calibrate tests/device_calibrate.cpp)
     target_link_libraries(device_calibrate PRIVATE candbg_core)
     set_target_properties(device_calibrate PROPERTIES

@@ -4,8 +4,6 @@
 #include <cstring>
 #include <mutex>
 
-#include "core/BitCalibration.h"
-
 CanDevice::CanDevice(QObject *parent)
     : QObject(parent)
 {
@@ -164,31 +162,14 @@ QString CanDevice::configureChannel(int port, int arbitrationBps, int dataBps,
     if (clock == 0)
         clock = BitTiming::DefaultClock;
 
-    BitTimingParams arbParams;
-    QString arbMsg;
-    bool calibrated = false;
-
-    // 优先使用实测标定表（SDK 的实际分频不能可靠地用公式外推）
-    const CalibrationEntry cal = BitCalibration::instance().lookup(arbitrationBps);
-    if (cal.valid) {
-        arbParams = cal.params;
-        clock = cal.clock;   // 用标定时验证过的名义时钟
-        calibrated = true;
-        arbMsg = QStringLiteral("已标定 clk=%1 brp=%2 tseg1=%3 tseg2=%4 sjw=%5")
-                     .arg(clock)
-                     .arg(cal.params.brp)
-                     .arg(cal.params.tseg1)
-                     .arg(cal.params.tseg2)
-                     .arg(cal.params.sjw);
-    } else {
-        // 实测标定出的 ZLG 约定：clk 即真实控制器时钟（60M/80M），字段是寄存器值
-        const auto r = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)),
-                                            samplePointPercent);
-        if (!r.ok)
-            return QString();
-        arbParams = r.params;
-        arbMsg = r.message;
-    }
+    // ZLG 寄存器约定：clk 即真实控制器时钟（60M/80M），字段是寄存器值。
+    // 非标准速率可勾选「原始位定时」用 configureChannelRaw() 直接覆盖。
+    const auto r = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)),
+                                        samplePointPercent);
+    if (!r.ok)
+        return QString();
+    const BitTimingParams arbParams = r.params;
+    const QString arbMsg = r.message;
 
     // 数据域：同样用 ZLG 约定（CANFD 加速段）
     BitTimingParams dataParams = arbParams;
@@ -210,7 +191,6 @@ QString CanDevice::configureChannel(int port, int arbitrationBps, int dataBps,
     if (!initChannel(static_cast<quint32>(port), cfg))
         return QString();
 
-    Q_UNUSED(calibrated);
     if (dataMsg.isEmpty())
         return arbMsg;
     return arbMsg + QStringLiteral(" | ") + dataMsg;
@@ -275,45 +255,21 @@ QVariantMap CanDevice::bitTimingPreview(int arbitrationBps, int dataBps,
     if (clock == 0)
         clock = BitTiming::DefaultClock;
 
-    bool calibrated = false;
-    BitTimingParams arbParams;
-    double arbActual = 0.0;
-    double arbSp = 0.0;
-    QString arbMessage;
-
-    const CalibrationEntry cal = BitCalibration::instance().lookup(arbitrationBps);
-    if (cal.valid) {
-        calibrated = true;
-        clock = cal.clock;
-        arbParams = cal.params;
-        arbActual = BitTiming::actualBps(clock, cal.params);
-        arbSp = BitTiming::samplePoint(cal.params);
-        arbMessage = QStringLiteral("已标定（%1）brp=%2 tseg1=%3 tseg2=%4 sjw=%5")
-                         .arg(cal.source)
-                         .arg(cal.params.brp)
-                         .arg(cal.params.tseg1)
-                         .arg(cal.params.tseg2)
-                         .arg(cal.params.sjw);
-    } else {
-        const auto arb = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)),
-                                              samplePointPercent);
-        arbParams = arb.params;
-        arbActual = arb.actualBps;
-        arbSp = arb.samplePoint;
-        arbMessage = arb.message;
-        out.insert(QStringLiteral("arbOk"), arb.ok);
-        if (!arb.ok) {
-            out.insert(QStringLiteral("ok"), false);
-            out.insert(QStringLiteral("message"), arb.message);
-            out.insert(QStringLiteral("clock"), clock);
-            out.insert(QStringLiteral("calibrated"), false);
-            return out;
-        }
+    const auto arb = BitTiming::calculate(clock, static_cast<quint32>(qMax(1, arbitrationBps)),
+                                          samplePointPercent);
+    out.insert(QStringLiteral("clock"), clock);
+    out.insert(QStringLiteral("arbOk"), arb.ok);
+    if (!arb.ok) {
+        out.insert(QStringLiteral("ok"), false);
+        out.insert(QStringLiteral("message"), arb.message);
+        return out;
     }
 
-    out.insert(QStringLiteral("clock"), clock);
-    out.insert(QStringLiteral("calibrated"), calibrated);
-    out.insert(QStringLiteral("arbOk"), true);
+    const BitTimingParams arbParams = arb.params;
+    const double arbActual = arb.actualBps;
+    const double arbSp = arb.samplePoint;
+    const QString arbMessage = arb.message;
+
     out.insert(QStringLiteral("arbMessage"), arbMessage);
     out.insert(QStringLiteral("arbActualBps"), arbActual);
     out.insert(QStringLiteral("arbSamplePoint"), arbSp);

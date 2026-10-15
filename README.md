@@ -110,14 +110,15 @@ ui/CanDebugger/
 │            components/ (AppButton, AppCard, AppCheckBox, AppComboBox,
 │            AppRadioButton, AppTextField, ChannelBadge, Icon, MetricCard,
 │            SectionHeader, SlimScrollBar, StatusDot, ToolbarButton)
-├─ tests/  单元：test_bittiming, test_bitcalibration, test_buffer_model,
-│          test_framebuilder, test_periodicsender, test_canfilter, test_statistics,
+├─ tests/  单元：test_bittiming, test_buffer_model, test_framebuilder,
+│          test_periodicsender, test_canfilter, test_statistics,
 │          test_periodicsender, test_canfilter, test_statistics, test_plotring,
 │          test_recorder, test_replayer, test_filter_proxy, test_framelist_roles,
 │          test_ring_concurrency；QML：qml/tst_{qml.cpp,panels,runtime}；
 │          实机：device_smoke, test_rx_pipeline, device_send_test,
 │          device_filter_test, device_merge_test, device_multichannel_test,
 │          device_replay_test, device_stress_test
+│          工具：device_baud_scan/device_bitrate_scan/device_calibrate
 ├─ scripts/ run_all_tests.sh, run_hw_tests.sh
 ├─ TEST_PLAN.md
 └─ udev/50-usbcanfd.rules
@@ -133,7 +134,7 @@ baud      = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 
 - `brp / tseg1 / tseg2` 都是**寄存器值 = 有效值 − 1**（SDK 各自 +1）；`clk` 就是
   **真实控制器时钟**：V1.01 = 60MHz、V1.03+ = 80MHz（界面「自动」按硬件版本推断）。
-- 内置实测值（USBCANFD-200U HW=0x0300，80MHz + 形状 `tseg1=12 tseg2=1`、SP 87.5%）：
+- 公式在 60/80MHz 下都能**精确**算出常用速率（125k~5M）。以 80MHz + SP 87.5% 为例：
 
   | 速率 | brp | tseg1 | tseg2 | 实测 |
   |---|---|---|---|---|
@@ -142,18 +143,15 @@ baud      = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
   | 500k | 9 | 12 | 1 | ACK 3/3 |
   | 1M | 4 | 12 | 1 | ACK 3/3 |
 
-- 「标定表」（`BitCalibration`，QSettings）**优先于公式**，用于固定实测值/现场标定/手工覆盖；
-  未标定的速率直接用公式（公式在 60/80MHz 下已能精确算出 125k~5M）。
-- 每张通道卡显示**实际使用的位定时**并标注「已标定 / 公式」；连接与「应用配置」
-  后的实际参数显示在左栏底部。
-- 标定表持久化在 `~/.config/CanDebugger/USBCANFD 调试器.conf`（QSettings）。
-- **新增速率标定**：`./build/device_calibrate <bps> [通道]`（需实机 + 对端在该速率上发送），
-  实测选出可用参数并写入标定表，App 重启即生效。
-- 高级：勾选「原始位定时（高级，覆盖公式）」可直接填写 `brp/tseg1/tseg2/sjw`，绕过标定与公式。
+- 每张通道卡显示**实际使用的位定时**；连接与「应用配置」后的实际参数显示在左栏底部。
+- 高级：勾选「原始位定时（高级，覆盖公式）」可直接填写 `brp/tseg1/tseg2/sjw`，
+  用于非标准速率或特殊硬件（绕过公式）。
+- **非标准速率现场诊断**：`./build/device_calibrate <bps> [通道]`（需实机 + 对端在该速率上发送）
+  实测哪组参数真的能通并打印出来（**不落盘**），可直接填到上面的「原始位定时」里。
 - 排查工具：
   - `./build/device_baud_scan [bps] [采样点%] [通道]`：按标准速率找位定时（被动监听 + ACK）。
   - `./build/device_bitrate_scan [时钟MHz] [通道] [最小] [最大] [监听ms] [探针] [固定tq]`：
-    **模型无关**朴素扫描，用于未知时钟/未知速率时定位真实位定时。
+    模型无关朴素扫描，用于未知时钟/未知速率时定位真实分频（判决约定时用的就是它）。
 
 ## 测试
 详细测试计划与执行报告见 `TEST_PLAN.md`。
@@ -164,8 +162,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ctest --test-dir build --output-on-failure      # bittiming/buffer_model/framebuilder/
                                                 # periodicsender/canfilter/statistics/plotring/
                                                 # recorder/replayer/filter_proxy/
-                                                # framelist_roles/ring_concurrency/
-                                                # bitcalibration/qml
+                                                # framelist_roles/ring_concurrency/qml
 
 # L4/L5 健壮性与覆盖率（脚本封装）
 scripts/run_all_tests.sh release                # 纯逻辑 + QML
@@ -190,7 +187,7 @@ scripts/run_hw_tests.sh
 ./build/device_stress_test        # ~1000fps 压力与内存
 ./build/device_baud_scan 250000   # 位定时扫描（标准速率 + 监听/ACK）
 ./build/device_bitrate_scan       # 模型无关朴素扫描（未知时钟/速率定位真实分频）
-./build/device_calibrate 125000   # 实测标定并写入标定表（App 共用）
+./build/device_calibrate 125000   # 实测诊断：打印可用参数（不落盘）
 ```
 
 

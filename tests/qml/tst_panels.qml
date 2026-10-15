@@ -68,8 +68,8 @@ TestCase {
     }
 
     // 回归：位定时文本必须对每个波特率组合都渲染出「当前」速率。
-    // 未标定速率（125k / 1M）曾在绑定里写 QString() 抛 ReferenceError，
-    // 结果是文本保留旧值并被永久冻结（QML 的绑定一旦抛异常就不再重算）。
+    // 早前该绑定里写 QString() 会抛 ReferenceError（QML 运行时没有 QString），
+    // 结果是文本保留旧值并被永久冻结（绑定一旦抛异常就不再重算）。
     function test_bitTimingTextForAllRates() {
         var theme = makeTheme()
         var c = loadPanel("DevicePanel")
