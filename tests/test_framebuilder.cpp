@@ -183,7 +183,7 @@ private slots:
         QCOMPARE(s.id, quint32(0x123));
         QCOMPARE(s.dlc, 2);
         QCOMPARE(s.data, QByteArray::fromHex("aabb"));
-        QCOMPARE(s.txm, int(ZCAN_SR_NORM));   // 默认自发自收
+        QCOMPARE(s.txm, int(ZCAN_TX_NORM));   // 默认正常模式（上总线，等 ACK）
 
         const QString desc = FrameBuilder::describe(map);
         QVERIFY(desc.contains(QStringLiteral("0x123")));

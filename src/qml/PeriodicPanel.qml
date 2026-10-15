@@ -10,12 +10,39 @@ Rectangle {
 
     color: theme.bg
 
-    ListModel { id: entries }
+    // 每通道一张独立的周期表（软件定时，条数不限）
+    ListModel { id: entries0 }
+    ListModel { id: entries1 }
+
+    property string noticeText: ""
+    property color noticeColor: theme ? theme.textDim : "#94a3b8"
+
+    function modelFor(p) {
+        return p === 1 ? entries1 : entries0
+    }
+
+    function channelState(p) {
+        var s = periodicSender.channelStates
+        return (s && p >= 0 && p < s.length) ? s[p] : null
+    }
+    function channelCount(p) {
+        var c = channelState(p)
+        return c ? c.count : 0
+    }
+    function channelActive(p) {
+        var c = channelState(p)
+        return c ? c.active : false
+    }
+    function channelError(p) {
+        var c = channelState(p)
+        return (c && c.error) ? c.error : ""
+    }
 
     function entriesArray() {
+        var m = modelFor(panel.port)
         var arr = []
-        for (var i = 0; i < entries.count; ++i) {
-            var r = entries.get(i)
+        for (var i = 0; i < m.count; ++i) {
+            var r = m.get(i)
             arr.push({
                 "id": parseInt((r.idv || "0"), 16) || 0,
                 "extended": r.extended,
@@ -25,7 +52,7 @@ Rectangle {
                 "dlc": parseInt(r.dlc, 10) || 0,
                 "data": r.data,
                 "dataFormat": 0,
-                "txm": 2,
+                "txm": 0,        // 正常模式：上总线并等待 ACK（自发自收需显式选择）
                 "echo": true,
                 "enabled": r.enabled,
                 "intervalMs": parseFloat(r.intervalMs) || 100,
@@ -36,9 +63,7 @@ Rectangle {
     }
 
     function addEntry() {
-        if (entries.count >= 8)
-            return
-        entries.append({
+        modelFor(panel.port).append({
             "enabled": true,
             "intervalMs": "100",
             "repeat": "0",
@@ -66,11 +91,19 @@ Rectangle {
         periodicSender.stopAsync(panel.port)
     }
 
+    // 切换通道时清掉上一条通知
+    onPortChanged: {
+        panel.noticeText = ""
+        panel.noticeColor = panel.theme ? panel.theme.textDim : "#94a3b8"
+    }
+
     Connections {
         target: periodicSender
-        function onOperationFinished(ok, message) {
-            status.color = ok ? theme.rx : theme.error
-            status.text = message
+        function onOperationFinished(port, ok, message) {
+            if (port !== panel.port)
+                return
+            panel.noticeColor = ok ? panel.theme.rx : panel.theme.error
+            panel.noticeText = message
         }
     }
 
@@ -85,7 +118,7 @@ Rectangle {
 
             SectionHeader { theme: panel.theme; title: qsTr("周期发送"); iconName: "loop" }
             Text {
-                text: qsTr("(硬件定时，最多 8 条；周期 ms，次数 0 = 循环)")
+                text: qsTr("(软件定时，条数不限；周期 ms，次数 0 = 循环)")
                 color: theme.textFaint
                 font.pixelSize: 10
                 font.family: theme.sansFamily
@@ -93,14 +126,22 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            Text { text: qsTr("通道"); color: theme.textDim; font.pixelSize: 11 }
-            AppComboBox {
-                id: portCombo
-                theme: panel.theme
-                Layout.preferredWidth: 96
-                model: [qsTr("通道 0"), qsTr("通道 1")]
-                currentIndex: panel.port
-                onCurrentIndexChanged: panel.port = currentIndex
+            // ---- 通道标签页 ----
+            RowLayout {
+                spacing: 4
+
+                Repeater {
+                    model: 2
+                    delegate: ChannelTab {
+                        theme: panel.theme
+                        channel: index
+                        selected: panel.port === index
+                        running: panel.channelActive(index)
+                        entryCount: panel.channelCount(index)
+                        text: qsTr("通道 %1").arg(index)
+                        onClicked: panel.port = index
+                    }
+                }
             }
 
             AppButton {
@@ -109,7 +150,6 @@ Rectangle {
                 iconName: "add"
                 text: qsTr("添加")
                 implicitHeight: 28
-                enabled: entries.count < 8
                 onClicked: panel.addEntry()
             }
             AppButton {
@@ -117,7 +157,7 @@ Rectangle {
                 variant: "ghost"
                 text: qsTr("下发配置")
                 implicitHeight: 28
-                enabled: canDevice.open && entries.count > 0 && !periodicSender.busy
+                enabled: canDevice.open && panel.modelFor(panel.port).count > 0
                 onClicked: panel.applyConfig()
             }
             AppButton {
@@ -126,7 +166,8 @@ Rectangle {
                 iconName: "play"
                 text: qsTr("启动")
                 implicitHeight: 28
-                enabled: canDevice.open && entries.count > 0 && !periodicSender.busy
+                enabled: canDevice.open && panel.modelFor(panel.port).count > 0
+                         && !panel.channelActive(panel.port)
                 onClicked: panel.startSending()
             }
             AppButton {
@@ -135,7 +176,7 @@ Rectangle {
                 iconName: "stop"
                 text: qsTr("停止")
                 implicitHeight: 28
-                enabled: canDevice.open && !periodicSender.busy
+                enabled: canDevice.open && panel.channelActive(panel.port)
                 onClicked: panel.stopSending()
             }
         }
@@ -145,7 +186,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            model: entries
+            model: panel.modelFor(panel.port)
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: SlimScrollBar { theme: panel.theme }
 
@@ -166,7 +207,7 @@ Rectangle {
                         text: ""
                         implicitWidth: 24
                         checked: model.enabled
-                        onToggled: entries.setProperty(index, "enabled", checked)
+                        onToggled: panel.modelFor(panel.port).setProperty(index, "enabled", checked)
                     }
                     Text {
                         text: "#" + (index + 1)
@@ -179,13 +220,13 @@ Rectangle {
                         theme: panel.theme
                         text: qsTr("扩展")
                         checked: model.extended
-                        onToggled: entries.setProperty(index, "extended", checked)
+                        onToggled: panel.modelFor(panel.port).setProperty(index, "extended", checked)
                     }
                     AppCheckBox {
                         theme: panel.theme
                         text: qsTr("FD")
                         checked: model.fd
-                        onToggled: entries.setProperty(index, "fd", checked)
+                        onToggled: panel.modelFor(panel.port).setProperty(index, "fd", checked)
                     }
 
                     Text { text: qsTr("ID"); color: theme.textDim; font.pixelSize: 11 }
@@ -194,7 +235,7 @@ Rectangle {
                         mono: true
                         Layout.preferredWidth: 66
                         text: model.idv
-                        onEditingFinished: entries.setProperty(index, "idv", text)
+                        onEditingFinished: panel.modelFor(panel.port).setProperty(index, "idv", text)
                     }
 
                     Text { text: qsTr("DLC"); color: theme.textDim; font.pixelSize: 11 }
@@ -203,7 +244,7 @@ Rectangle {
                         mono: true
                         Layout.preferredWidth: 40
                         text: model.dlc
-                        onEditingFinished: entries.setProperty(index, "dlc", text)
+                        onEditingFinished: panel.modelFor(panel.port).setProperty(index, "dlc", text)
                     }
 
                     Text { text: qsTr("数据"); color: theme.textDim; font.pixelSize: 11 }
@@ -213,7 +254,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 140
                         text: model.data
-                        onEditingFinished: entries.setProperty(index, "data", text)
+                        onEditingFinished: panel.modelFor(panel.port).setProperty(index, "data", text)
                     }
 
                     Text { text: qsTr("周期"); color: theme.textDim; font.pixelSize: 11 }
@@ -222,7 +263,7 @@ Rectangle {
                         mono: true
                         Layout.preferredWidth: 58
                         text: model.intervalMs
-                        onEditingFinished: entries.setProperty(index, "intervalMs", text)
+                        onEditingFinished: panel.modelFor(panel.port).setProperty(index, "intervalMs", text)
                     }
                     Text { text: "ms"; color: theme.textFaint; font.pixelSize: 10 }
 
@@ -232,7 +273,7 @@ Rectangle {
                         mono: true
                         Layout.preferredWidth: 48
                         text: model.repeat
-                        onEditingFinished: entries.setProperty(index, "repeat", text)
+                        onEditingFinished: panel.modelFor(panel.port).setProperty(index, "repeat", text)
                     }
                     Text { text: qsTr("0=循环"); color: theme.textFaint; font.pixelSize: 10 }
 
@@ -242,7 +283,7 @@ Rectangle {
                         iconName: "clear"
                         implicitHeight: 26
                         implicitWidth: 30
-                        onClicked: entries.remove(index)
+                        onClicked: panel.modelFor(panel.port).remove(index)
                     }
                 }
             }
@@ -252,10 +293,21 @@ Rectangle {
             id: status
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            color: theme.textDim
+            color: panel.noticeText !== "" ? panel.noticeColor : theme.textDim
             font.pixelSize: 11
             font.family: theme.sansFamily
-            text: canDevice.open ? qsTr("就绪") : qsTr("请先连接设备")
+            text: {
+                if (!canDevice.open)
+                    return qsTr("请先连接设备")
+                if (panel.noticeText !== "")
+                    return panel.noticeText
+                var e = panel.channelError(panel.port)
+                if (e !== "")
+                    return e
+                if (panel.channelActive(panel.port))
+                    return qsTr("通道 %1 周期发送中…").arg(panel.port)
+                return qsTr("就绪")
+            }
         }
     }
 }

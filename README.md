@@ -2,7 +2,7 @@
 
 基于 Qt 5.15 Quick/QML 的 ZLG USBCANFD-200U CAN/CANFD 调试工具，中文界面。
 里程碑 1：**设备配置 + 实时接收显示**（步骤 0–3）。
-里程碑 2：**单帧发送 + 硬件定时发送**（步骤 4–5）。
+里程碑 2：**单帧发送 + 定时发送**（步骤 4–5；步骤 14 起定时发送改为软件实现）。
 里程碑 3：**硬件/软件滤波 + 统计引擎**（步骤 6–7）。
 里程碑 4：**实时绘图 + 统计面板**（步骤 8–9）。
 里程碑 5：**记录 / 回放**（步骤 10–12）。
@@ -22,7 +22,8 @@
 - 单帧发送：标准/扩展、CAN2.0/CANFD、数据/远程、BRS、DLC（0–8 / FD 0–64）
 - 数据编辑 Hex/ASCII/十进制；数据生成 CRC-8 / 滚动计数 / 递增填充
 - 发送模式（正常/单次/自发自收/自发自收单次）+ 回显；多帧列表批量发送
-- 硬件定时发送：最多 8 条，周期(ms)、次数(0=循环)，整体启停与单条启停
+- 周期发送：软件定时（PC 侧精确定时线程），**条数不限**，周期(ms)、次数(0=循环)；
+  两通道以内联标签页分别配置与独立启停
 
 ### 里程碑 3
 - 软件滤波（显示层，即时生效）：ID 单值/范围、方向（全部/仅收/仅发）、
@@ -72,8 +73,9 @@
 - **接收**：独立 `RxWorker` 线程 + 环形缓冲 + 30Hz 合并刷新。
 - **锁分层**：`CanDevice` 用 `m_rxMutex` 保护接收、`m_ioMutex` 保护发送/配置，二者分离，
   接收线程的阻塞式等待不再饿死 GUI（生命周期调用同时持两锁，与接收串行）。
-- **异步执行**：`AsyncExecutor` 后台线程执行发送/周期配置/硬件滤波/回放加载，QML 调用立即返回，
+- **异步执行**：`AsyncExecutor` 后台线程执行发送/硬件滤波/回放加载，QML 调用立即返回，
   结果经 `sendCompleted` / `operationFinished` / `loadFinished` / `hardwareApplyFinished` 回传。
+  （周期发送为软件实现，`apply/start/stop` 为同步快路径，结果仍经 `operationFinished` 通知。）
 - **设备会话**：`DeviceController` 后台执行连接/断开/应用配置，配合「连接中」遮罩与失败弹框。
 
 ## 依赖
@@ -120,7 +122,7 @@ ui/CanDebugger/
 │  └─ qml/   Main, Theme, DevicePanel, ReceiveView, SendWorkspace, SendPanel,
 │            PeriodicPanel, StatisticsPanel, RecordPanel,
 │            components/ (AppButton, AppCard, AppCheckBox, AppComboBox,
-│            AppRadioButton, AppTextField, ChannelBadge, Icon, MetricCard,
+│            AppRadioButton, AppTextField, ChannelBadge, ChannelTab, Icon, MetricCard,
 │            SectionHeader, SlimScrollBar, StatusDot, ToolbarButton,
 │            WindowButton)
 ├─ tests/  单元：test_bittiming, test_buffer_model, test_framebuilder,
@@ -192,7 +194,7 @@ scripts/run_hw_tests.sh
 ```sh
 ./build/device_smoke              # 设备打开/配置/自发自收
 ./build/test_rx_pipeline          # 设备→线程→环形缓冲→模型 全链路
-./build/device_send_test          # 单帧发送 + 硬件定时发送
+./build/device_send_test          # 单帧发送 + 软件定时发送
 ./build/device_filter_test        # 硬件验收滤波 + 软件模型滤波 + 统计联动
 ./build/device_merge_test         # 合并接收模式
 ./build/device_multichannel_test  # 双通道并发收发
@@ -226,8 +228,9 @@ scripts/run_hw_tests.sh
 - 帧字段由 `FrameBuilder` 构建，DLC 为准（数据不足补零、超出截断）；远程帧不带数据。
 - 数据生成：CRC-8（poly 0x07，写末字节）、滚动计数（写首字节）、递增填充（从 0 起），
   为本地约定，跨节点使用需与对端统一。
-- 定时发送经 `CMD_CAN_TTX`/`CMD_CAN_TTX_CTL` 下发硬件表，`ZCAN_TTX_CFG.size` 取字节数；
-  `interval` 单位 100us（UI 以 ms 输入）。
+- 定时发送为**软件实现**：`PeriodicSender` 用单调时钟调度 + 独立发送线程，经
+  `transmitCan`/`transmitFd` 逐帧发出（不再使用硬件定时表 `CMD_CAN_TTX`），因此条数不限；
+  周期最小 1ms（UI 以 ms 输入）；落后超过一个周期时丢弃落后时隙并重新对齐，不突发补发。
 - 发送模式默认「正常」。`VCI_Transmit` 正常模式会等待总线 ACK，无应答总线上默认等到 ~1.5s；
   `CanDevice::startChannel()` 会下发 `CMD_CAN_TX_TIMEOUT(0x44)`，等待上限由 `txTimeoutMs`
   控制（默认 20ms，可用 `canDevice.txTimeoutMs` 调整），超时后帧仍会提交。
@@ -236,8 +239,8 @@ scripts/run_hw_tests.sh
 
 ## 记录 / 回放说明
 - 记录接入：接收帧在 `RxManager::drain()` 中按批非阻塞入队（**显示层软件滤波之前**，
-  不受显示过滤影响），本机发送由 `FrameBuilder` 成功发送路径记录；接收侧的 `tx` 帧
-  （回显/回环）被跳过以避免重复。**硬件定时发送（`CMD_CAN_TTX`）与回放发送不计入记录**。
+  不受显示过滤影响），本机发送由发送路径记录（`FrameBuilder` 单帧/批量、`PeriodicSender`
+  软件定时）；接收侧的 `tx` 帧（回显/回环）被跳过以避免重复。**回放发送不计入记录**。
 - 格式：ASC（CANoe 风格，`时间 通道 id[x] 方向 kind dlc data`，`kind ∈ d/r/fd/fdb/fdr/e`）；
   CSV（表头 `timestamp,channel,dir,id,type,dlc,data`）。时间为相对记录起点的秒（6 位小数）。
 - 回放：自动识别 ASC/CSV，`Replayer::load()` 解析后 `play()`；`speed` 倍速、`pause()/resume()/stop()`，

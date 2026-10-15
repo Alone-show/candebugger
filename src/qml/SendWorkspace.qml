@@ -42,7 +42,9 @@ Rectangle {
                 spacing: 6
 
                 Repeater {
-                    model: [qsTr("单帧发送"), qsTr("周期发送") + " (" + periodicSender.count + "/8)", qsTr("记录 / 回放")]
+                    model: [qsTr("单帧发送"),
+                            qsTr("周期发送") + (periodicSender.count > 0 ? " (" + periodicSender.count + ")" : ""),
+                            qsTr("记录 / 回放")]
 
                     ToolbarButton {
                         theme: workspace.theme
@@ -63,7 +65,7 @@ Rectangle {
                 }
                 Text {
                     visible: workspace.currentIndex === 1
-                    text: qsTr("硬件定时发送，最多 8 条")
+                    text: qsTr("软件定时发送，条数不限")
                     color: theme.textFaint
                     font.pixelSize: 10
                     font.family: theme.sansFamily

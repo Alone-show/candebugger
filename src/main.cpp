@@ -41,6 +41,8 @@ int main(int argc, char *argv[])
     frameBuilder.setStatistics(&statistics);
     frameBuilder.setRecorder(&recorder);
     PeriodicSender periodicSender(&canDevice);
+    periodicSender.setStatistics(&statistics);
+    periodicSender.setRecorder(&recorder);
     Replayer replayer(&canDevice);
     DeviceController deviceController(&canDevice, &rxManager);
 

@@ -104,7 +104,8 @@ private:
     QFile *m_ascFile = nullptr;
     QFile *m_csvFile = nullptr;
 
-    bool m_recording = false;
+    // 发送线程（PeriodicSender）也会调用 enqueueFrame，故用原子量避免跨线程读取竞态
+    std::atomic<bool> m_recording{false};
     int m_formatFlags = AscFormat | CsvFormat;
     QString m_ascPath;
     QString m_csvPath;

@@ -183,7 +183,7 @@ bool FrameBuilder::specFromMap(const QVariantMap &map, FrameSpec *spec, QString 
     s.fd = map.value(QStringLiteral("fd"), false).toBool();
     s.remote = map.value(QStringLiteral("remote"), false).toBool();
     s.brs = map.value(QStringLiteral("brs"), false).toBool();
-    s.txm = map.value(QStringLiteral("txm"), static_cast<int>(ZCAN_SR_NORM)).toInt();
+    s.txm = map.value(QStringLiteral("txm"), static_cast<int>(ZCAN_TX_NORM)).toInt();
     s.echo = map.value(QStringLiteral("echo"), true).toBool();
     s.crc = map.value(QStringLiteral("crc"), false).toBool();
     s.rolling = map.value(QStringLiteral("rolling"), false).toBool();

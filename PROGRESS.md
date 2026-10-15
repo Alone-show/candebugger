@@ -146,7 +146,7 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
   - `device_send_test` 实机自收：标准 CAN `0x123` 与扩展 CANFD `0x1ABCDEF0`（12 字节 BRS）
     均按输入字段正确收到
 
-## 步骤 5 — 定时发送 ✅ 完成（已实机验证）
+## 步骤 5 — 定时发送 ✅ 完成（已实机验证；**后续已改为软件定时，见步骤 14**）
 - 产出：`src/core/PeriodicSender.{h,cpp}`、`src/qml/PeriodicPanel.qml`、`tests/test_periodicsender.cpp`；
   `CanDevice` 新增 `setPeriodicConfig/setPeriodicEnabled`（并备有 `getSendQueueSize/Space`、
   `enableSendQueue`、`clearSendQueue`）；`main.cpp` 暴露 `periodicSender`
@@ -327,6 +327,35 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 
 ---
 
+## 步骤 14 — 周期发送改为软件定时（双通道标签页） ✅ 完成（离线 + TSan/ASan 验证）
+- 背景：原实现走固件定时表（`CMD_CAN_TTX`），受 `ZCAN_TTX_CFG.table[8]` 硬限制，最多 8 条
+- 产出：重写 `src/core/PeriodicSender.{h,cpp}`、重写 `src/qml/PeriodicPanel.qml`、
+  重写 `tests/test_periodicsender.cpp`；`main.cpp` 注入 `statistics`/`recorder`；
+  `Recorder::m_recording` 改为原子量
+- 实现：
+  - **PC 侧精确定时**：不再使用 `CMD_CAN_TTX`/`CMD_CAN_TTX_CTL`，改为 `steady_clock` 绝对时间调度
+    + `condition_variable` 定时等待；条数不再受限
+  - **线程模型**（2 条常驻线程，与通道数无关）：调度线程只算到期条目并入有界队列（从不调 SDK）；
+    发送线程是唯一做阻塞式 `VCI_Transmit` 的地方。因此 GUI 与调度都不受发送阻塞影响
+  - **防漂移 + 落后丢弃**：正常时 `nextDue += interval`（不累积漂移）；落后超过一个周期时
+    丢弃落后时隙并 `nextDue = now + interval`（不突发补发）
+  - **启动立即发一次**：`start()` 以启动时刻为基准写入 `nextDue`，之后按周期推进
+  - **双通道独立**：每通道各自一张表、各自启停、各自错误；`channelStates` 单通知暴露给 QML
+  - **UI**：`PeriodicPanel` 的通道下拉框改为顶部内联标签页（复用 `ToolbarButton`），
+    每标签显示运行态圆点与条数；通道各自独立的 `ListModel` 与调度
+  - **统计/记录接入**：发送成功计入 `Statistics::countSent`（因该接口非线程安全，
+    发送线程只做原子累计、批量回投 GUI 线程）并按 `FrameBuilder` 口径写入 `Recorder`
+  - 硬件接口 `CanDevice::setPeriodicConfig/setPeriodicEnabled` **保留但不再调用**（便于回退）
+- 验证：
+  - `ctest` **13/13 通过**；`test_periodicsender` **25 项全通过**（含纯逻辑 17 项 +
+    调度/发送/线程路径 7 项，后者经测试缝 `setTransmitBackend` 注入无硬件替身）
+  - **TSan 0 警告、ASan 0 错误/泄漏**（覆盖真实调度与发送线程）
+  - `QT_QPA_PLATFORM=offscreen ./build/CanDebugger` 无 QML 报错
+- 未验证（需实机）：真实总线上的周期精度、`VCI_Transmit` 阻塞下的队列行为、
+  以及 >8 条的实机并发发送
+
+---
+
 ## 实机验证汇总
 - 已安装 udev 规则：`/etc/udev/rules.d/50-usbcanfd.rules`，设备节点变为 `crw-rw-rw- root:users`，普通用户可访问
 - `device_smoke`、`test_rx_pipeline`、`device_send_test`、`device_filter_test`、`device_replay_test`、
@@ -347,7 +376,7 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 - [x] 里程碑 5：步骤 10–12（记录器 / 回放器 / 记录回放面板），实机 `device_replay_test` 通过
 - [ ] 实机高帧率下核验绘图流畅度与 CPU 占用（1000 点/秒验收项，当前为离线/结构验证）
 - [ ] 接外部 CAN 节点，核验标准公式 500k/2M 的互操作性（对端若用 demo 参数可能不匹配）
-- [ ] 记录硬件定时发送（`CMD_CAN_TTX`）帧（可选：接入 TTX 发送路径）
+- [x] 记录周期性发送帧（步骤 14：软件定时发送已按 `FrameBuilder` 口径写入 `Recorder`）
 
 ## 已知说明
 - 收发共用设备句柄，`CanDevice` 用互斥锁串行化；接收线程持锁最长 `timeout`(5ms)
@@ -387,8 +416,9 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 8. **`RxManager::stop()` 在 GUI 线程最多阻塞 5s**（等待接收线程退出）；正常 <10ms。
 9. **QML 未设置 QQuickStyle**（因未链接 `Qt5QuickControls2`），使用默认样式，视觉与 Fusion 有差异。
 10. **`device_smoke` / `test_rx_pipeline` 依赖真实设备**，故意不注册进 ctest；`ctest` 只含纯单测。
-11. **发送侧队列/超时未接入 UI**：批量发送已实现（`FrameBuilder::sendBatch`）；定时发送走硬件
-    `CMD_CAN_TTX`，不依赖软件发送队列。发送队列/超时 API（`ZCAN_CMD_*_SEND_QUEUE_*`）已在
+11. **发送侧队列/超时未接入 UI**：批量发送已实现（`FrameBuilder::sendBatch`）；定时发送自步骤 14 起
+    由 `PeriodicSender` 自己的软件调度线程与有界队列发送，不使用设备侧发送队列。
+    发送队列/超时 API（`ZCAN_CMD_*_SEND_QUEUE_*`）已在
     `CanDevice` 提供（`getSendQueueSize/Space`、`enableSendQueue`、`clearSendQueue`），UI 暂未使用。
 12. 排查提示：若运行报 `libusbcanfd.so.1.0.15: cannot open shared object`，检查 `lib/` 软链与 RPATH。
 13. **定时发送配置语义**：`ZCAN_TTX_CFG.size` 取字节数 `sizeof(ZCAN_TTX) * n`（**非条目数**），
@@ -401,9 +431,10 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
     下发即生效（实测），无需重启通道。
 16. **软件滤波为显示层**：仅影响列表/统计注入前的显示，不减少 SDK 上报；只有硬件滤波能减少上报量。
     `FrameFilterProxyModel` 不保留被过滤行的视图项（修复风险 6）。
-17. **统计发送侧口径**：`txCount` 仅由 `FrameBuilder` 单帧/批量发送累计；硬件定时发送
-    （`CMD_CAN_TTX`）与软件发送队列未计入，故 `txFps` 不含周期性发送。自收回环帧（`tx=1`）
-    只计入总线负载与 Top-N，不计入 rx/tx。若回显关闭，负载率会低估本机发送量。
+17. **统计发送侧口径**：`txCount` 由 `FrameBuilder` 单帧/批量发送与**软件定时发送**
+    （步骤 14，发送成功即计入）累计；回放发送未计入。硬件定时发送（`CMD_CAN_TTX`）路径
+    已不再调用。自收回环帧（`tx=1`）只计入总线负载与 Top-N，不计入 rx/tx。
+    若回显关闭，负载率会低估本机发送量。
 18. **负载率/错误计数为近似**：位长为估算（含填充位余量假设，非精确）；错误计数只用管线
     `errorFrames`（合并接收 `ZCAN_DT_ZCAN_ERROR_DATA` / 非合并 `hdr.inf.err` 置位）。
     **已移除** `busErrorCount` 及其轮询 `VCI_ReadErrInfo`：实测该调用单次阻塞约 1006ms，
@@ -421,10 +452,11 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
     `qmlRegisterType` 运行时注册（非 qmldir 模块）。若改用 `qmlcachegen`/静态 QML 模块或
     `qt_add_qml_module`，需另行登记该类型；`lineColors` 以 QML 颜色数组传入，C++ 侧同时兼容
     `QColor` 与字符串色值。
-23. **记录 tx 口径（步骤 10）**：为避免与回显/回环重复，**接收管线中的 `tx` 帧一律不写盘**，
-    本机发送仅由 `FrameBuilder::sendFrame` 成功发送路径记录。因此**硬件定时发送
-    （`CMD_CAN_TTX`）与回放发送不经过 `sendFrame`，不会被记录**（与风险 17 同源）；
-    如需记录周期性发送，需另接发送路径。回放时文件中的 `Tx`/`Rx` 帧都会被重新发送（回放=复现总线流量）。
+23. **记录 tx 口径（步骤 10，步骤 14 起已扩展）**：为避免与回显/回环重复，**接收管线中的 `tx` 帧
+    一律不写盘**，本机发送由发送路径记录：`FrameBuilder::sendFrame`（单帧/批量）与
+    `PeriodicSender::sendOne`（软件定时，步骤 14）成功发送时均按同一口径写入 `Recorder`。
+    回放发送不经过两者，仍不会被记录（与风险 17 同源）。
+    回放时文件中的 `Tx`/`Rx` 帧都会被重新发送（回放=复现总线流量）。
 24. **记录文件格式为本地约定**：ASC 为 CANoe **风格**（`时间 通道 id[x] 方向 kind dlc data`，
     `kind ∈ d/r/fd/fdb/fdr/e`），非严格 CANoe 全量格式；CSV 表头固定
     `timestamp,channel,dir,id,type,dlc,data`，扩展帧以 id 后缀 `x` 表示，`type ∈

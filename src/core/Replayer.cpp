@@ -430,7 +430,7 @@ bool Replayer::transmit(const FrameData &f)
     spec.brs = f.brs;
     spec.dlc = f.len;
     spec.data = f.data;
-    spec.txm = ZCAN_SR_NORM;
+    spec.txm = ZCAN_TX_NORM;
     spec.echo = true;
 
     QString err;

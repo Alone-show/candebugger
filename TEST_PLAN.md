@@ -56,7 +56,7 @@ L7 人工验收       部署、热插拔、外部节点互操作
 | `test_bittiming` | 标准预设、80MHz 时钟、任意速率近似、maxTq 钳制、采样点目标与钳制、退化参数 |
 | `test_buffer_model` | 环形缓冲顺序/溢出/批量、模型角色、裁剪、清空、时间戳 |
 | `test_framebuilder` | Hex/ASCII/Dec、CRC-8、ID 掩码、CAN/FD 字段、远程、补零/截断、**DLC 边界与钳制**、**空缓冲拒绝、CAN 拒绝 FD 标志**、**修饰符组合**、**data 转换**、spec 往返 |
-| `test_periodicsender` | 周期换算、字段/索引/flags、FD、>8 拒绝、空表、非法数据 |
+| `test_periodicsender` | 条目解析（无 8 条上限）、FD 帧、次数耗尽自停、到期/防漂移/落后重对齐、两通道独立表与独立计数、启动即发、停止即停、设备断开自停、发送失败回投 |
 | `test_canfilter` | ID 范围/单值、标准 vs 扩展掩码、方向、类型、格式、硬件表字节数/截断交换/超 64 组 |
 | `test_statistics` | fps 公式、经典/FD 位长、rx/错误计数、发送计数、窗口速率、负载率、Top-N 排序、**边界与钳制** |
 | `test_plotring` | 基本读写、溢出保留最新、多序列、增删、改容量、清空 |
@@ -80,7 +80,7 @@ L7 人工验收       部署、热插拔、外部节点互操作
 |---|---|
 | `device_smoke` | 打开/信息/通道/自发自收 |
 | `test_rx_pipeline` | 设备→线程→环形缓冲→模型 全链路 |
-| `device_send_test` | 单帧 CAN/FD + 硬件定时发送 + 单条启停 |
+| `device_send_test` | 单帧 CAN/FD + 软件定时发送（`PeriodicSender`）+ 单条启停 |
 | `device_filter_test` | 硬件验收滤波 + 软件模型滤波 + 统计联动 |
 | `device_merge_test` | **新增**：合并接收 `VCI_ReceiveData` 全链路 + 取消合并恢复 |
 | `device_multichannel_test` | **新增**：双通道并发收发与通道归属 |
@@ -172,12 +172,14 @@ view/RealtimePlot.cpp           20.0%
 |---|---|---|
 | device_smoke | ✅ 2s | SN、双通道、自发自收 2 |
 | test_rx_pipeline | ✅ 2s | 接收 100 / 丢弃 0 / 模型 100 |
-| device_send_test | ✅ 14s | CAN+FD 自收；定时 700ms 增 28 帧 |
+| device_send_test | ✅ 14s | CAN+FD 自收；定时 700ms 增 28 帧（硬件定时时期） |
 | device_filter_test | ✅ 53s | 硬件仅 0x200 生效；软件仅 0x300；统计联动 |
 | device_merge_test | ✅ 16s | 合并收 CAN/FD 成功；取消合并恢复 |
 | device_multichannel_test | ✅ 3s | ch0/ch1 并发，通道归属正确 |
 | device_replay_test | ✅ 12s | ASC/CSV 记录→回放自收一致 |
-| device_stress_test | ✅ 45s | **~1226–1316 fps，丢弃 0，RSS +1.2MB/8s** |
+| device_stress_test | ✅ 45s | **~1226–1316 fps，丢弃 0，RSS +1.2MB/8s**（硬件定时时期） |
+
+> 上表为 L3 实机结果（硬件定时时期）。定时发送自步骤 14 起改为软件实现，需在实机重新复测。
 
 ---
 
@@ -188,9 +190,11 @@ view/RealtimePlot.cpp           20.0%
    导致 `RingBuffer` 在 `m_head/m_count` 上被误报数据竞争。
    已将 `RingBuffer` 改用 `std::mutex`（语义等价、TSan 可追踪）；
    改后 TSan 由 254s + 55 警告变为 **0.16s + 0 警告**。其余模块仍用 `QMutex`。
-2. **硬件定时发送最小间隔**：8 条 `CMD_CAN_TTX` 在 2–10ms 区间实测吞吐稳定在
-   ~1000–1300 fps（设备/总线上限），可满足 1000fps 验收；首次运行偶发无流量，
-   已加入「通道复位 + 一次重试」保证稳定。
+2. **周期发送吞吐与精度（步骤 14 改版后待实测）**：定时发送改为 PC 侧精确定时线程
+   （`steady_clock` + 独立发送线程），不再受固件 8 条限制。真实总线上的周期精度、`>8 条`
+   并发发送、以及 `VCI_Transmit` 偶发阻塞下的队列行为**尚未实机复测**。
+   旧硬件路径（8 条 `CMD_CAN_TTX`）2–10ms 区间实测吞吐 ~1000–1300 fps，可作为设备/总线
+   上限的量级参考。
 3. **`VCI_Transmit` 并发阻塞（风险 27 复现）**：实机发送偶发阻塞数秒（`device_send_test`
    端到端 ~14–53s），属已知问题，非本次测试引入。
 
@@ -203,7 +207,7 @@ view/RealtimePlot.cpp           20.0%
 **遗留 / 阻塞项（明确标注，不阻塞第一版验收）**：
 - ❗ **外部节点互操作性**（最高优先级风险 1）：无硬件，未验证标准公式 500k/2M 与第三方节点互通
 - ⚠️ `VCI_Transmit` 在接收并发时阻塞 → `FrameBuilder` 仍在 GUI 线程同步发送（风险 27）
-- ⚠️ 硬件定时发送（`CMD_CAN_TTX`）与回放发送不计入 `Statistics.txCount` 与记录（风险 17/23）
+- ⚠️ 回放发送不计入 `Statistics.txCount` 与记录（风险 17/23）；软件定时发送自步骤 14 起已计入
 - ⚠️ `hdr.ts` 设备时间戳单位未确认（风险 5）
 - ℹ️ 设备相关文件覆盖率偏低（需将 L3 纳入 gcov 才能提升）
 - ℹ️ 8 条 cppcheck 性能建议（QString getter 按值返回，Q_PROPERTY 习惯写法，可不改）

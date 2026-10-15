@@ -16,6 +16,7 @@
         <file alias="components/AppRadioButton.qml">src/qml/components/AppRadioButton.qml</file>
         <file alias="components/AppTextField.qml">src/qml/components/AppTextField.qml</file>
         <file alias="components/ChannelBadge.qml">src/qml/components/ChannelBadge.qml</file>
+        <file alias="components/ChannelTab.qml">src/qml/components/ChannelTab.qml</file>
         <file alias="components/Icon.qml">src/qml/components/Icon.qml</file>
         <file alias="components/MetricCard.qml">src/qml/components/MetricCard.qml</file>
         <file alias="components/SectionHeader.qml">src/qml/components/SectionHeader.qml</file>
