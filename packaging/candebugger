@@ -1,0 +1,15 @@
+#!/bin/sh
+# CanDebugger 启动包装脚本（安装为 /usr/bin/candebugger）
+#
+# 程序与自带 Qt 运行库分别位于 /opt/candebugger/bin 与 /opt/candebugger/lib，
+# 二者不同级，故用 LD_LIBRARY_PATH 明确库路径（不依赖 ELF RUNPATH）。
+# 插件 / QML 模块另由 bin/qt.conf 指定，这里兜底设置一次。
+set -eu
+
+APPDIR=/opt/candebugger
+
+export LD_LIBRARY_PATH="$APPDIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export QT_PLUGIN_PATH="$APPDIR/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+export QML2_IMPORT_PATH="$APPDIR/qml${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
+
+exec "$APPDIR/bin/CanDebugger" "$@"

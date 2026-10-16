@@ -1,0 +1,14 @@
+#!/bin/sh
+# 卸载/清除：规则文件已被 dpkg 删除，重载 udev 使生效
+set -e
+
+case "$1" in
+    remove|purge)
+        if command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules || true
+            udevadm trigger || true
+        fi
+        ;;
+esac
+
+exit 0

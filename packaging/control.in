@@ -1,0 +1,26 @@
+Package: candebugger
+Version: @VERSION@
+Section: devel
+Priority: optional
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Installed-Size: @INSTALLED_SIZE@
+Depends: @DEPENDS@
+Description: ZLG USBCANFD-200U CAN/CANFD debugger (Qt Quick UI)
+ A Qt5 Quick/QML based bus debugger for ZLG USBCANFD-200U adapters.
+ .
+ Features:
+  - channel configuration (bit timing, sample point, termination, listen-only,
+    merge-receive) with live device info (SN / hardware / firmware / API version)
+  - real-time receive with software display filtering and hardware acceptance
+    filtering, timestamped frame list (relative / absolute)
+  - single-frame and software-timed periodic transmit over CAN and CAN FD, with
+    data generators (CRC-8, rolling counter, incremental fill, ID increment)
+  - per-channel statistics (frame rate, bus load, error count, Top-N by ID)
+  - zero-dependency live plotting of bus load and frame rates
+  - background-thread recording (ASC / CSV) and replay with speed control
+ .
+ This package is self-contained: it ships its own Qt5 runtime libraries, Qt
+ platform plugins and the QtQuick/QML modules under /opt/candebugger, plus the
+ proprietary libusbcanfd.so. It installs a udev rule granting regular users
+ access to the 3068:0009 USB device.

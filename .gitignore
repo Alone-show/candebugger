@@ -3,6 +3,9 @@ build/
 build-*/
 cmake-build-*/
 
+# .deb 打包产物
+dist/
+
 # CMake / 构建产物
 CMakeCache.txt
 CMakeFiles/

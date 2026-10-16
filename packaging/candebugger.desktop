@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=USBCANFD 调试器
+Name[en]=USBCANFD Debugger
+GenericName=CAN/CANFD 调试工具
+Comment=基于 Qt5 的 ZLG USBCANFD-200U CAN/CANFD 调试工具
+Comment[en]=Qt5 based CAN/CANFD debugger for ZLG USBCANFD-200U
+Exec=candebugger
+TryExec=candebugger
+Icon=candebugger
+Terminal=false
+Categories=Development;Utility;
+Keywords=CAN;CANFD;USBCANFD;ZLG;总线;
+StartupWMClass=CanDebugger

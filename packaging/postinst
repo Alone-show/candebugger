@@ -1,0 +1,10 @@
+#!/bin/sh
+# 安装/升级后：重载 udev 规则，让普通用户无需重插即可访问设备
+set -e
+
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+    udevadm trigger || true
+fi
+
+exit 0

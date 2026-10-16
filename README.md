@@ -95,6 +95,61 @@ cmake --build build -j
 产物：`build/CanDebugger`（RUNPATH 已设为 `$ORIGIN/lib`，随附 `lib/libusbcanfd.so` 与软链
 `libusbcanfd.so.1.0.15`）。
 
+## 打包成 .deb
+```sh
+scripts/package_deb.sh                 # 自动 Release 构建（build-release/）并出包
+MAINTAINER="Your Name <you@example.com>" scripts/package_deb.sh
+BUILD_DIR=build scripts/package_deb.sh # 用已有构建目录
+```
+产物：`dist/candebugger_<版本>_<架构>.deb`（版本取自 `CMakeLists.txt` 的 `project(... VERSION)`）。
+安装 / 卸载：
+```sh
+sudo dpkg -i dist/candebugger_0.1.1_amd64.deb
+sudo dpkg -r candebugger
+```
+
+**自包含**：包内自带 Qt5 运行库（`libQt5*.so`）、**ICU**（`libicu*.so`）、平台插件（xcb /
+wayland / offscreen）与 QtQuick/QML 模块，**不依赖目标机安装 Qt**；`libusbcanfd.so` 也一并随附。
+安装布局：
+
+| 路径 | 内容 |
+|---|---|
+| `/opt/candebugger/bin/CanDebugger` | 主程序（`qt.conf` / `qtquickcontrols2.conf` 同目录） |
+| `/opt/candebugger/lib/` | 自带 Qt 运行库 + ICU + `libusbcanfd.so.1.0.15` |
+| `/opt/candebugger/plugins/`、`/opt/candebugger/qml/` | Qt 平台插件、QtQuick/QML 模块 |
+| `/usr/bin/candebugger` | 启动包装脚本（设置库 / 插件 / QML 搜索路径后 exec） |
+| `/usr/share/applications/candebugger.desktop`、图标 | 桌面菜单项 |
+| `/usr/lib/udev/rules.d/50-usbcanfd.rules` | 设备访问规则（postinst 自动 `udevadm reload/trigger`） |
+
+体积：deb ≈ 18 MB / 安装后 ≈ 72 MB（ICU 的 `libicudata.so.76` 一项就占 30 MB 未压缩）。
+
+要点：
+- **ICU 必须自带（不能省）**：发行版的 `libQt5Core.so.5` 的 DT_NEEDED 里直接列了
+  `libicui18n.so.76` / `libicuuc.so.76`，而且 ICU 的符号是**带版本后缀**的（`u_strToUpper_76`、
+  `ucol_open_76`…），所以既不能指向别的 ICU 大版本，也不能指望"不走到就不崩"——`Qt5Core`
+  在 `main` 之前就调用了它。实测用空壳 ICU 库替换会直接
+  `symbol lookup error: libQt5Core.so.5: undefined symbol: u_strToUpper_76`。
+  这就是此前"在 25.10 打包、拿到 26.04 装"失败的原因（那边只有 ICU 74/78）。
+- **`Depends` 取「直接 DT_NEEDED」而非 `ldd` 全传递闭包**：依赖表更短更稳，不会把
+  ICU / DBus 的深层传递依赖（`libkrb5-*`、`libgssapi-krb5-2` 之类）写进来；包内自带的库
+  （Qt5 / ICU / libusbcanfd）自动不算依赖，但仍会检查它们自己的 NEEDED。
+- **跨发行版别名**：只改包名、不改 SONAME 的条目写成 alternatives ——
+  `libglib2.0-0 | libglib2.0-0t64`、`libpng16-16 | libpng16-16t64`、`libffi8 | libffi7`。
+  `libicu*` 不应出现在 `Depends` 里（出现会告警）。
+- **架构过滤**：解析 `ldconfig -p` 时只取本机架构的条目（`ldconfig` 在启用 i386 的机器上会同时
+  列出 32 位库，否则 `libstdc++.so.6` 会被解析成 `lib32stdc++6`）。
+- **去符号**：打包时对包内所有 ELF 执行 `strip --strip-unneeded`（保留 `.dynsym`，动态加载不受影响）。
+  实测 Ubuntu 自带的 Qt 库 / 插件本就已 strip（无 `.symtab`），因此只有主程序与厂商 SDK 库
+  真正变小：`CanDebugger` 717K→572K、`libusbcanfd.so` 254K→224K，安装体积 −170 KB、
+  **deb 文件 −28 KB**（符号表压缩率高）。想要更大空间需换别的办法，见下。
+  可用 `STRIP=0` 关闭。
+- **压缩**：默认用 `-Zxz -z9`（dpkg-deb 1.22 自带默认是 zstd -19，xz -9 大约小 9%）。
+  换回默认：`DEB_COMPRESS="-Zzstd -z19" scripts/package_deb.sh`。
+- 强制使用 Qt Quick Controls 2 内置 **Default** 样式（`qtquickcontrols2.conf`），避免在 KDE 桌面
+  被切到 `org.kde.desktop` 样式而多依赖 libKF5*。
+- 不打 `imageformats` / `iconengines`（程序不使用 `QIcon`/QML `Image`；带上会把 `libQt5Svg` →
+  `libQt5Widgets` 及 KDE 的 `KIconEnginePlugin` 拖进来）。
+
 ## 运行与 USB 权限
 普通用户访问 `3068:0009` 需要 udev 规则：
 ```sh
@@ -115,6 +170,10 @@ ui/CanDebugger/
 ├─ resources.qrc
 ├─ include/zcan.h          # ZLG SDK 头文件
 ├─ lib/                    # libusbcanfd.so (+ .1.0.15 软链)
+├─ packaging/              # .deb 打包素材：control.in / postinst / postrm /
+│  │                       #   candebugger(包装脚本) / *.desktop / qt.conf /
+│  │                       #   qtquickcontrols2.conf / make_icon.py
+├─ dist/                   # .deb 产物（忽略提交）
 ├─ src/
 │  ├─ main.cpp
 │  ├─ core/  BitTiming, CanDevice, CanFilter, FrameData, FrameBuilder,
@@ -137,7 +196,7 @@ ui/CanDebugger/
 │          device_periodic_test, device_filter_test, device_merge_test,
 │          device_multichannel_test, device_replay_test, device_stress_test
 │          工具：device_baud_scan/device_bitrate_scan/device_calibrate
-├─ scripts/ run_all_tests.sh, run_hw_tests.sh
+├─ scripts/ run_all_tests.sh, run_hw_tests.sh, package_deb.sh
 ├─ TEST_PLAN.md
 └─ udev/50-usbcanfd.rules
 ```
