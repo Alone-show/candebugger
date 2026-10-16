@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(CanDebugger VERSION 0.1.0 LANGUAGES CXX)
+project(CanDebugger VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -96,6 +96,9 @@ target_link_libraries(CanDebugger PRIVATE
     Qt5::Qml
     Qt5::Quick
 )
+
+# 版本号单一来源：CMake project(VERSION)，供 main.cpp 注入 QML（Qt.application.version）
+target_compile_definitions(CanDebugger PRIVATE CANDBG_VERSION="${PROJECT_VERSION}")
 
 set_target_properties(CanDebugger PROPERTIES
     BUILD_RPATH "$ORIGIN/lib"

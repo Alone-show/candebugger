@@ -23,6 +23,10 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("USBCANFD 调试器"));
     app.setOrganizationName(QStringLiteral("CanDebugger"));
+#ifdef CANDBG_VERSION
+    // 版本号来自 CMake project(VERSION)，QML 侧用 Qt.application.version 读取
+    app.setApplicationVersion(QStringLiteral(CANDBG_VERSION));
+#endif
 
     // CanFilter 作为 rx.filter 暴露给 QML，需注册为不可创建类型
     qmlRegisterUncreatableType<CanFilter>("CanDebugger", 1, 0, "CanFilter",

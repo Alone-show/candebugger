@@ -214,7 +214,7 @@ ApplicationWindow {
                 font.family: theme.sansFamily
             }
             Text {
-                text: "v1.0"
+                text: Qt.application.version.length > 0 ? "v" + Qt.application.version : "v-dev"
                 color: theme.textFaint
                 font.pixelSize: 10
                 font.family: theme.monoFamily
