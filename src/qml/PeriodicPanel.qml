@@ -194,7 +194,7 @@ Rectangle {
                 id: rowItem
                 width: listView.width
                 height: 38
-                color: index % 2 ? Qt.rgba(1, 1, 1, 0.015) : "transparent"
+                color: index % 2 ? theme.zebra : "transparent"
 
                 RowLayout {
                     anchors.fill: parent

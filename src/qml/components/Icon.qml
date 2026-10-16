@@ -43,7 +43,10 @@ Item {
         "winMinimize":  { "path": "M3.5 8 H12.5", "fill": false },
         "winMaximize":  { "path": "M3.5 3.5 H12.5 V12.5 H3.5 Z", "fill": false },
         "winRestore":   { "path": "M3.5 3.5 H10.5 V10.5 H3.5 Z M5.5 5.5 H12.5 V12.5 H5.5", "fill": false },
-        "winClose":     { "path": "M4 4 L12 12 M12 4 L4 12", "fill": false }
+        "winClose":     { "path": "M4 4 L12 12 M12 4 L4 12", "fill": false },
+        // ---- 主题切换：当前深色显示太阳（点击转浅色），反之月亮 ----
+        "sun":          { "path": "M8 0.7 V2 M8 14 V15.3 M0.7 8 H2 M14 8 H15.3 M2.8 2.8 L3.75 3.75 M12.25 12.25 L13.2 13.2 M2.8 13.2 L3.75 12.25 M12.25 3.75 L13.2 2.8 M8 4.7 A3.3 3.3 0 1 0 8 11.3 A3.3 3.3 0 1 0 8 4.7", "fill": false },
+        "moon":         { "path": "M14 8.53 A6 6 0 1 1 7.47 2 A4.67 4.67 0 0 0 14 8.53 Z", "fill": false }
     })
 
     onNameChanged: canvas.requestPaint()

@@ -65,6 +65,7 @@ L7 人工验收       部署、热插拔、外部节点互操作
 | `test_filter_proxy` | **新增**：默认放行、ID/方向/格式过滤、代理映射、动态重过滤、源清空、count 信号 |
 | `test_framelist_roles` | **新增**：13 个角色完整性、全角色取值、格式/方向文本、ID 掩码、着色、越界、maxRows、时间基准、count 信号 |
 | `test_ring_concurrency` | **新增**：单/多生产者-消费者不变式、并发 vector 收发（TSan 目标） |
+| `test_themecontroller` | **新增**：默认深色、非法模式回退、模式规范化、持久化往返、`toggle` 语义、`auto` 跟随系统深浅、显式模式忽略系统深浅、`darkChanged/modeChanged` 触发时机 |
 
 ### L2 QML 测试（`tst_qml`，offscreen）
 
@@ -72,6 +73,8 @@ L7 人工验收       部署、热插拔、外部节点互操作
 |---|---|
 | `Panels::test_allQmlCompile` | 8 个 QML 文件全部编译通过 |
 | `Panels::test_instantiatePanels` | 6 个面板实例化/销毁无错误（注入 `theme`） |
+| `Panels::test_theme*` | **新增**：默认深色、深浅两套色板的键一致且取值互不相同（防「只改一套」）、`theme.<token>` 随 `dark` 切换、组件绑定响应主题切换、hover/pressed 明暗方向随主题翻转、`themeController` 切换驱动 `Theme` |
+| `Panels::test_mainWindowControlsPalette` | **新增**：`Main.qml` 把 Qt Controls 的 `palette.*` 写到根窗口（Qt 5.15 的 Default 样式不读 `QGuiApplication` 调色板、`qApp->setPalette()` 也推不动它），子控件与弹层继承 |
 | `Runtime::*` | 7 个上下文属性存在、rx 暂停/时间戳/清空、软件滤波属性、统计属性、FrameBuilder 转换、Recorder/Replayer 属性、`import CanDebugger 1.0`（RealtimePlot 注册） |
 
 ### L3 实机测试（`scripts/run_hw_tests.sh`，需设备）

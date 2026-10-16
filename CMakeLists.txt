@@ -60,6 +60,8 @@ add_library(candbg_core STATIC
     src/core/RxManager.h
     src/core/Statistics.cpp
     src/core/Statistics.h
+    src/core/ThemeController.cpp
+    src/core/ThemeController.h
     src/model/FrameFilterProxyModel.cpp
     src/model/FrameFilterProxyModel.h
     src/model/FrameListModel.cpp
@@ -160,6 +162,10 @@ if(CANDBG_BUILD_TESTS)
         add_executable(test_ring_concurrency tests/test_ring_concurrency.cpp)
         target_link_libraries(test_ring_concurrency PRIVATE candbg_core Qt5::Test)
         add_test(NAME ring_concurrency COMMAND test_ring_concurrency)
+
+        add_executable(test_themecontroller tests/test_themecontroller.cpp)
+        target_link_libraries(test_themecontroller PRIVATE candbg_core Qt5::Test)
+        add_test(NAME themecontroller COMMAND test_themecontroller)
     endif()
 
     # ---- QML 组件测试（QtQuickTest + offscreen） ----

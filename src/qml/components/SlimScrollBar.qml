@@ -11,8 +11,8 @@ ScrollBar {
         implicitWidth: 6
         implicitHeight: 6
         radius: 3
-        color: control.pressed ? (control.theme ? control.theme.borderLight : "#2a3b53")
-                               : (control.theme ? control.theme.border : "#1e293b")
+        color: control.pressed ? (control.theme ? control.theme.scrollThumbActive : "#2a3b53")
+                               : (control.theme ? control.theme.scrollThumb : "#1e293b")
         opacity: control.active ? 1.0 : 0.0
         Behavior on opacity { NumberAnimation { duration: 120 } }
     }

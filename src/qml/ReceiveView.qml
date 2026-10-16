@@ -306,7 +306,7 @@ Rectangle {
                     height: theme.rowHeight
                     color: rowHover.containsMouse ? theme.panelAlt
                          : (isTx ? Qt.rgba(theme.tx.r, theme.tx.g, theme.tx.b, 0.06)
-                                 : (index % 2 ? Qt.rgba(1, 1, 1, 0.015) : "transparent"))
+                                 : (index % 2 ? theme.zebra : "transparent"))
 
                     MouseArea {
                         id: rowHover

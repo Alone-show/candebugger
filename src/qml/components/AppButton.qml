@@ -70,9 +70,10 @@ Button {
             var base = control.baseColor()
             if (!control.enabled)
                 return base
+            // hover/pressed 的明暗方向随主题翻转（浅色下压暗、深色下提亮）
             if (control.pressed)
-                return Qt.darker(base, 1.2)
-            return control.hovered ? Qt.lighter(base, 1.12) : base
+                return control.theme.pressTint(base)
+            return control.hovered ? control.theme.hoverTint(base) : base
         }
         border.width: (control.variant === "ghost" || control.activeFocus) ? 1 : 0
         border.color: control.activeFocus ? (control.theme ? control.theme.accent : "#38bdf8")

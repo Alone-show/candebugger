@@ -19,6 +19,178 @@ TestCase {
         return c
     }
 
+    // ---------------- 深浅色主题 ----------------
+
+    function colorString(c) {
+        if (c === undefined || c === null)
+            return ""
+        return String(c).toLowerCase()
+    }
+
+    // 默认深色（应用历史观感基线），且 Theme.dark 跟随注入的 themeController
+    function test_themeDefaultIsDark() {
+        var theme = makeTheme()
+        verify(theme !== null)
+        compare(theme.dark, true, "默认应为深色")
+        if (typeof themeController !== "undefined")
+            compare(theme.dark, themeController.dark, "Theme.dark 应跟随 themeController")
+        theme.destroy()
+    }
+
+    // 令牌表必须成套：两张色板键一致；除有意共用的值外，两套取值都要不同。
+    // 「新增令牌只改一套色板」或「漏把令牌暴露成 theme.xxx」会在这里立刻失败。
+    function test_themePalettesAreCompletePairs() {
+        var theme = makeTheme()
+        verify(theme !== null)
+
+        var darkKeys = Object.keys(theme.darkTokens).sort()
+        var lightKeys = Object.keys(theme.lightTokens).sort()
+        compare(darkKeys.join(","), lightKeys.join(","), "深浅两套色板的键不一致")
+
+        // 有意在两套色板中共用的值：
+        //   - titlebarClose：关闭按钮红，深色界面里红底白字同样成立；
+        //   - textFaint：#64748b 在「近黑」与「近白」底上都满足 4:1 以上对比度，无需区分。
+        var shared = { "titlebarClose": true, "textFaint": true }
+        for (var i = 0; i < darkKeys.length; ++i) {
+            var key = darkKeys[i]
+            verify(theme[key] !== undefined, "色板令牌未暴露为属性: theme." + key)
+            if (shared[key])
+                continue
+            verify(colorString(theme.darkTokens[key]) !== colorString(theme.lightTokens[key]),
+                   "令牌 " + key + " 深浅两套取值相同（漏改一套色板？）")
+        }
+        theme.destroy()
+    }
+
+    // theme.<token> 必须随 dark 切换，且与对应色板逐项一致
+    function test_themeTokensFollowDarkSwitch() {
+        var theme = makeTheme()
+        verify(theme !== null)
+        theme.dark = true
+
+        var keys = Object.keys(theme.darkTokens)
+        for (var i = 0; i < keys.length; ++i) {
+            compare(colorString(theme[keys[i]]), colorString(theme.darkTokens[keys[i]]),
+                    "深色下 " + keys[i] + " 与色板不一致")
+        }
+
+        theme.dark = false
+        for (var j = 0; j < keys.length; ++j) {
+            compare(colorString(theme[keys[j]]), colorString(theme.lightTokens[keys[j]]),
+                    "浅色下 " + keys[j] + " 与色板不一致")
+        }
+
+        // 浅色 bg 不能取纯白：test_panelRootBackground 用「!= #ffffff」检测面板漏绑 theme.bg
+        verify(colorString(theme.bg) !== "#ffffff", "浅色 bg 不能取纯白")
+        theme.destroy()
+    }
+
+    // 组件必须响应主题切换（绑定不能只在初始化时算一次）
+    function test_componentsReactToThemeSwitch() {
+        var theme = makeTheme()
+        verify(theme !== null)
+
+        var c = Qt.createComponent("qrc:/qml/components/AppCard.qml")
+        compare(c.status, Component.Ready, "AppCard: " + c.errorString())
+        var card = c.createObject(testCase, { "theme": theme })
+        verify(card !== null, "AppCard 实例化失败")
+
+        theme.dark = true
+        compare(colorString(card.color), colorString(theme.card))
+        var darkColor = colorString(card.color)
+
+        theme.dark = false
+        compare(colorString(card.color), colorString(theme.card))
+        verify(colorString(card.color) !== darkColor, "切换深浅色后 AppCard 颜色没变")
+
+        card.destroy()
+        theme.destroy()
+    }
+
+    // hover / pressed 的明暗方向必须随主题翻转：深色提亮、浅色压暗
+    function test_hoverPressTintDirection() {
+        var theme = makeTheme()
+        verify(theme !== null)
+        // Qt.darker(x, 1.0) 仅是「把字符串转成 color 值」，便于取 .r 分量
+        var gray = Qt.darker("#808080", 1.0)
+
+        theme.dark = true
+        verify(theme.hoverTint(gray).r > gray.r, "深色下 hover 应提亮")
+        verify(theme.pressTint(gray).r < theme.hoverTint(gray).r, "深色下 pressed 应比 hover 暗")
+
+        theme.dark = false
+        verify(theme.hoverTint(gray).r < gray.r, "浅色下 hover 应压暗")
+        verify(theme.pressTint(gray).r < theme.hoverTint(gray).r, "浅色下 pressed 应比 hover 更暗")
+
+        theme.destroy()
+    }
+
+    // themeController -> Theme 的真实接线（main.cpp 注入的那条链路）
+    function test_themeControllerToggleDrivesTheme() {
+        if (typeof themeController === "undefined")
+            skip("未注入 themeController")
+
+        var theme = makeTheme()
+        verify(theme !== null)
+        var before = themeController.dark
+        var bgBefore = colorString(theme.bg)
+
+        themeController.toggle()
+        compare(themeController.dark, !before, "toggle 未翻转模式")
+        compare(theme.dark, !before, "Theme.dark 未跟随控制器")
+        verify(colorString(theme.bg) !== bgBefore, "切换后 theme.bg 没变")
+
+        // 还原，避免影响其它用例（控制器在测试进程内是共享的）
+        themeController.toggle()
+        compare(themeController.dark, before)
+        compare(colorString(theme.bg), bgBefore)
+        theme.destroy()
+    }
+
+    // Qt Quick Controls 2 的 Default 样式调色板：Qt 5.15 下它既不读 QGuiApplication
+    // 调色板、qApp->setPalette() 也推不动（实测），只能由 Main.qml 把 theme.controls
+    // 逐项写到根窗口上，再由子控件与弹层继承。这里守着这条接线。
+    function test_mainWindowControlsPalette() {
+        var theme = makeTheme()
+        verify(theme !== null)
+
+        var c = Qt.createComponent("qrc:/qml/Main.qml")
+        compare(c.status, Component.Ready, "Main: " + c.errorString())
+        var win = c.createObject(null)
+        verify(win !== null, "Main.qml 实例化失败: " + c.errorString())
+
+        compare(colorString(win.palette.window), colorString(theme.panel), "palette.window")
+        compare(colorString(win.palette.text), colorString(theme.text), "palette.text")
+        compare(colorString(win.palette.base), colorString(theme.inputBg), "palette.base")
+        compare(colorString(win.palette.button), colorString(theme.panelAlt), "palette.button")
+        compare(colorString(win.palette.highlight), colorString(theme.accent), "palette.highlight")
+        compare(colorString(win.palette.toolTipBase), colorString(theme.card), "palette.toolTipBase")
+        compare(colorString(win.palette.toolTipText), colorString(theme.text), "palette.toolTipText")
+        // 深色板下 BusyIndicator 圆环 / Dialog 边框取的就是这个角色，必须比卡片底亮
+        compare(colorString(win.palette.dark), colorString(theme.textFaint), "palette.dark")
+
+        // 子控件继承窗口调色板
+        var toggle = findByName(win.contentItem, "themeToggle")
+        verify(toggle !== null, "找不到主题切换按钮")
+        compare(colorString(toggle.palette.buttonText), colorString(theme.text),
+                "子控件未继承窗口调色板")
+
+        // 弹层里的控件（连接中遮罩的 BusyIndicator）同样要继承。
+        // Qt Controls 的 Popup 内容不在 contentItem 子树里，得按对象树查，
+        // 且内容要等弹层打开后才实例化。
+        var popup = findChild(win, "busyPopup")
+        verify(popup !== null, "找不到连接中遮罩 busyPopup")
+        popup.open()
+        var busy = findChild(win, "busyIndicator")
+        verify(busy !== null, "找不到连接中遮罩的 BusyIndicator")
+        compare(colorString(busy.palette.dark), colorString(theme.textFaint),
+                "弹层内控件未继承窗口调色板")
+        popup.close()
+
+        win.destroy()
+        theme.destroy()
+    }
+
     function test_allQmlCompile() {
         var names = ["Main", "Theme", "DevicePanel", "ReceiveView", "SendPanel",
                      "PeriodicPanel", "StatisticsPanel", "RecordPanel", "SendWorkspace"]

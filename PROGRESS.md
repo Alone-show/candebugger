@@ -15,6 +15,65 @@
 
 ---
 
+## ⭐ 新会话交接 — 当前状态（2026-10-16）
+
+**本次会话主题**：**深浅色适配**。在不动 CAN/SDK 收发与线程模型的前提下，把硬编码深色的
+设计系统改成「语义令牌 + 深/浅两套色板」，加主题切换与持久化。上一会话交接见下一条。
+
+**交付物**
+
+- `src/qml/Theme.qml` — 双色板（`darkTokens`/`lightTokens`）+ `tokens`/`dark` 开关；新增 `zebra`、
+  `scrollThumb`/`scrollThumbActive`、`controls`（Qt Controls 调色板映射表）与 `hoverTint`/`pressTint`；
+  `channelColor(i)` 等既有 API 与令牌名全部不变。
+- `src/core/ThemeController.{h,cpp}`（新）— 模式状态机（`auto`/`light`/`dark`，默认 `dark`）+
+  `QSettings` 持久化（键 `ui/themeMode`）+ `toggle()`。**不碰平台 API**：系统深浅由 `setSystemDark()`
+  注入，故可用 `QTEST_APPLESS_MAIN` 单测。
+- `src/main.cpp` — `detectSystemDark()`（palette 亮度 → `GTK_THEME` → `gsettings color-scheme` 兜底）、
+  `--theme=auto|light|dark`、`paletteChanged` 重探测、注入 `themeController` 上下文属性。
+- `src/qml/Main.qml` — 标题栏新增太阳/月亮切换按钮；根窗口写 `palette.*`（17 个角色）。
+- `src/qml/components/Icon.qml` — 新增 `sun`/`moon` 两条 Canvas 路径。
+- `src/qml/components/AppButton.qml` — hover/pressed 改走 `theme.hoverTint`/`pressTint`。
+- `src/qml/components/SlimScrollBar.qml` — 改用 `scrollThumb`/`scrollThumbActive`。
+- `src/qml/{ReceiveView,PeriodicPanel}.qml` — 斑马纹 `Qt.rgba(1,1,1,0.015)` → `theme.zebra`。
+- `tests/test_themecontroller.cpp`（新）— 8 个用例（模式/持久化/信号时机）。
+- `tests/qml/tst_panels.qml` — 新增 6 个主题用例（含「两套色板键一致且取值互不相同」守门）。
+- `tests/qml/tst_qml.cpp` — 注入 `themeController`（配置文件落临时目录，避免写脏真实配置）。
+
+**踩过的坑（实测结论，别再走一遍）**
+
+1. **`qApp->setPalette()` 对 Qt Quick Controls 2 的 Default 样式完全无效** —— 该样式的调色板是
+   内置硬编码（`window=#ffffff / dark=#353637 / highlight=#0066ff`），既不读 `QGuiApplication::palette()`，
+   在控件创建前设置也不生效。只能**从 QML 写** `palette.*`：在根 `ApplicationWindow` 上写一次，
+   Button/Slider/BusyIndicator/Dialog/ToolTip/ComboBox 弹层实测全部继承。
+2. **Qt 5.15 的 `QQuickPalette` 没有 `placeholderText` 角色**：写 `palette.placeholderText:` 会直接
+   `Cannot assign to non-existent property` 导致整个 Main.qml 编译失败（`link`/`linkVisited` 等其余角色可用）。
+3. **`palette.dark` 是 Default 样式 BusyIndicator 圆环与 Dialog 边框的来源**：深色板下必须给中间调
+   （这里用 `textFaint #64748b`），否则圆环在深色卡片上不可见。顺带修掉了「连接中」遮罩在深色下
+   圆环几乎看不见的老问题（原来取系统浅色调色板的 `#353637`）。
+4. Default 样式的 `palette.button` 不能等于卡片色（否则弹框「确定」按钮与背景融成一片），取 `panelAlt`。
+5. `Popup`（busyPopup）的内容要**打开后**才实例化；QML 测试里断言弹层内控件的调色板需先 `popup.open()`，
+   且要用 QtTest 的 `findChild`（`Popup` 内容不在 `contentItem` 子树里）。
+6. 浅色 `bg` **不能取纯白**：`tst_panels::test_panelRootBackground` 用 `!= #ffffff` 检测面板漏绑 `theme.bg`。
+7. 浅色语义色要比深色压深一档（`rx #059669`、`accent/tx #0284c7`、`warn #b45309`、`error #dc2626`），
+   深色板里的 emerald/sky 放到白底上对比度不足 2:1。
+
+**验证**
+
+- `ctest`（`build`，14/14 通过）：新增 `themecontroller`；`qml` 用例 31 个全通过。
+- 浅色/深色界面**离屏实渲染截图对比**（临时工具，未入库）：标题栏/左栏卡片/接收表斑马纹/统计卡/
+  周期页签发区/失败弹框（Default 样式「确定」按钮 + Overlay 遮罩）逐点取色核对，深色板取值与原设计一致
+  （`bg #090d16`、`card #131d31`、`panelAlt #182338`、`inputBg #0b1322` 全部未变）。
+- 启动参数落盘：`--theme=light|auto` 写入 `ui/themeMode`；无参数启动不改用户配置。
+
+**遗留 / 可选**
+
+- 「跟随系统」只能靠 palette 亮度推断（Qt 5.15 无 `styleHints.colorScheme`）；UI 上只有浅/深一键切换，
+  `auto` 需 `--theme=auto` 或配置预置。
+- `Main.qml` 的失败弹框有 `QML Dialog: Binding loop detected for property "implicitWidth"` 警告，
+  属 Default 样式 Dialog 既有问题（本次未改该弹框结构，改动前后都会打印）。
+
+---
+
 ## ⭐ 新会话交接 — 当前状态（2026-10-15）
 
 **本次会话主题**：把位定时换算**定论**下来 —— 上一会话的「实际时钟 = 0.8 × 名义时钟」近似

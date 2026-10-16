@@ -21,6 +21,27 @@ ApplicationWindow {
 
     Theme { id: theme }
 
+    // Qt Quick Controls 2「Default 样式」的调色板。ToolTip / Dialog 按钮 / BusyIndicator /
+    // Overlay 遮罩 / Slider / ComboBox 弹层这些控件取的是 control.palette.*，而 Qt 5.15 的
+    // Default 样式既不读 QGuiApplication 调色板、也不受 qApp->setPalette() 影响（实测），
+    // 只能从 QML 写。写在根窗口上即可，子控件与弹层会继承。
+    palette.window: theme.controls.window
+    palette.windowText: theme.controls.windowText
+    palette.base: theme.controls.base
+    palette.alternateBase: theme.controls.alternateBase
+    palette.text: theme.controls.text
+    palette.button: theme.controls.button
+    palette.buttonText: theme.controls.buttonText
+    palette.brightText: theme.controls.brightText
+    palette.highlight: theme.controls.highlight
+    palette.highlightedText: theme.controls.highlightedText
+    palette.toolTipBase: theme.controls.toolTipBase
+    palette.toolTipText: theme.controls.toolTipText
+    palette.dark: theme.controls.dark
+    palette.mid: theme.controls.mid
+    palette.light: theme.controls.light
+    palette.shadow: theme.controls.shadow
+
     readonly property bool maximized: visibility === Window.Maximized
     readonly property bool resizeEnabled: visibility !== Window.Maximized
                                           && visibility !== Window.FullScreen
@@ -281,6 +302,15 @@ ApplicationWindow {
             }
             ToolbarButton {
                 theme: theme
+                objectName: "themeToggle"
+                iconName: theme.dark ? "sun" : "moon"
+                implicitWidth: 30
+                ToolTip.visible: hovered
+                ToolTip.text: theme.dark ? qsTr("切换到浅色主题") : qsTr("切换到深色主题")
+                onClicked: if (typeof themeController !== "undefined") themeController.toggle()
+            }
+            ToolbarButton {
+                theme: theme
                 iconName: "help"
                 implicitWidth: 30
                 ToolTip.visible: hovered
@@ -476,6 +506,7 @@ ApplicationWindow {
     // ---------------- 连接中遮罩 ----------------
     Popup {
         id: busyPopup
+        objectName: "busyPopup"
         modal: true
         focus: true
         closePolicy: Popup.NoAutoClose
@@ -495,6 +526,7 @@ ApplicationWindow {
             anchors.centerIn: parent
             spacing: 14
             BusyIndicator {
+                objectName: "busyIndicator"
                 anchors.horizontalCenter: parent.horizontalCenter
                 running: deviceController.busy
                 implicitWidth: 40
