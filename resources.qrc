@@ -22,6 +22,8 @@
         <file alias="components/SectionHeader.qml">src/qml/components/SectionHeader.qml</file>
         <file alias="components/SlimScrollBar.qml">src/qml/components/SlimScrollBar.qml</file>
         <file alias="components/StatusDot.qml">src/qml/components/StatusDot.qml</file>
+        <file alias="components/Toast.qml">src/qml/components/Toast.qml</file>
+        <file alias="components/ToastHost.qml">src/qml/components/ToastHost.qml</file>
         <file alias="components/ToolbarButton.qml">src/qml/components/ToolbarButton.qml</file>
         <file alias="components/WindowButton.qml">src/qml/components/WindowButton.qml</file>
     </qresource>

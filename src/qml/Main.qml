@@ -418,6 +418,50 @@ ApplicationWindow {
         }
     }
 
+    // ---------------- 发送失败横幅（贴发送区上方，离操作最近）----------------
+    // 任意发送入口失败都会在此弹出一条轻量横幅：单帧/快捷周期/周期表/记录回放。
+    // 同文案在宿主内合并计数（×N），不打断操作、不弹模态框。
+    // sendWorkspace 是嵌套后代（非父/兄弟），无法用 anchors，改用坐标映射定位。
+    ToastHost {
+        id: toastHost
+        theme: theme
+        width: Math.max(240, Math.min(560, sendWorkspace.width - 24))
+        x: sendWorkspace.mapToItem(null, 0, 0).x + (sendWorkspace.width - width) / 2
+        y: sendWorkspace.mapToItem(null, 0, 0).y - height - 10
+        z: 500
+    }
+
+    Connections {
+        target: frameBuilder
+        function onSendCompleted(ok, description, error) {
+            if (!ok)
+                toastHost.show(error && error.length > 0 ? error : qsTr("发送失败"), "error")
+        }
+    }
+
+    Connections {
+        target: periodicSender
+        function onOperationFinished(port, ok, message) {
+            if (!ok)
+                toastHost.show(message, "error")
+        }
+    }
+
+    Connections {
+        target: periodicSender
+        function onQuickOperationFinished(port, ok, message) {
+            if (!ok)
+                toastHost.show(message, "error")
+        }
+    }
+
+    Connections {
+        target: replayer
+        function onSendFailed(message) {
+            toastHost.show(message, "error")
+        }
+    }
+
     // ---------------- 无边框缩放热区（四边 + 四角）----------------
     // 仅最外侧 theme.resizeMargin 像素响应，最大化/全屏时整体隐藏。
     Item {

@@ -307,6 +307,9 @@ void Replayer::stop()
     if (m_timer)
         m_timer->stop();
     const bool wasPlaying = m_playing;
+    // 停止前把后台线程已上报的发送错误收出来（否则用户手动停止会吞掉失败提示）
+    if (wasPlaying)
+        drainPendingError();
     clearSendQueue();
     resetPlayback();
     if (wasPlaying)
@@ -351,6 +354,8 @@ void Replayer::tick()
         emit positionChanged();
         emit playingChanged();
         emit finished();
+        // tick 已停止，收尾阶段(队列仍在后台发送)的错误需再收一次，否则无人上报
+        QTimer::singleShot(150, this, [this] { drainPendingError(); });
     }
 }
 
@@ -472,8 +477,10 @@ void Replayer::drainPendingError()
         err = m_pendingError;
         m_pendingError.clear();
     }
-    if (!err.isEmpty())
+    if (!err.isEmpty()) {
         setError(err);
+        emit sendFailed(err);
+    }
 }
 
 void Replayer::setError(const QString &msg)

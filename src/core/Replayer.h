@@ -95,6 +95,8 @@ signals:
     void durationChanged();
     void positionChanged();
     void errorStringChanged();
+    // 回放「发送」失败（区别于加载失败等其它错误）：供界面做发送失败提醒
+    void sendFailed(const QString &message);
     void finished();
     void busyChanged();
     void loadFinished(bool ok, const QString &error);

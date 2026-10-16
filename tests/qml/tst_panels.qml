@@ -474,4 +474,51 @@ TestCase {
         panel.destroy()
         theme.destroy()
     }
+
+    // ---------------- 发送失败横幅 ----------------
+
+    // 同文案在合并窗口内只保留一条并计数递增；不同文案各自成条；空文案不弹
+    function test_toastHostCoalescesSameMessage() {
+        var theme = makeTheme()
+        var c = Qt.createComponent("qrc:/qml/components/ToastHost.qml")
+        compare(c.status, Component.Ready, "ToastHost: " + c.errorString())
+        var host = c.createObject(testCase, { "theme": theme, "width": 400 })
+        verify(host !== null, "ToastHost 实例化失败")
+
+        host.show("发送失败：总线无应答", "error")
+        compare(host.itemCount(), 1, "首次失败应弹出一条横幅")
+        compare(host.countOf(0), 1, "首次计数应为 1")
+
+        host.show("发送失败：总线无应答", "error")
+        compare(host.itemCount(), 1, "同文案应合并，不新建")
+        compare(host.countOf(0), 2, "同文案应计数递增")
+
+        host.show("其它失败", "error")
+        compare(host.itemCount(), 2, "不同文案应各自成条")
+
+        host.show("", "error")
+        compare(host.itemCount(), 2, "空文案不应弹横幅")
+
+        host.destroy()
+        theme.destroy()
+    }
+
+    // 同屏条数超上限时淘汰最旧，避免周期失败把屏幕堆满
+    function test_toastHostCapsVisibleCount() {
+        var theme = makeTheme()
+        var c = Qt.createComponent("qrc:/qml/components/ToastHost.qml")
+        compare(c.status, Component.Ready, "ToastHost: " + c.errorString())
+        var host = c.createObject(testCase, { "theme": theme, "width": 400, "maxVisible": 2 })
+        verify(host !== null, "ToastHost 实例化失败")
+
+        host.show("A", "error")
+        host.show("B", "error")
+        host.show("C", "error")
+        compare(host.itemCount(), 2, "超过上限应淘汰最旧")
+        compare(host.messageOf(0), "B", "应保留较新的两条")
+        compare(host.messageOf(1), "C")
+
+        host.destroy()
+        theme.destroy()
+    }
 }
