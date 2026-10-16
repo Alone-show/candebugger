@@ -164,6 +164,23 @@ sudo udevadm trigger
 ./build/CanDebugger
 ```
 
+### 连接失败时的原因判定
+`VCI_OpenDevice` 只返回成功/失败，不区分原因。因此「连接设备」失败时会用
+`UsbProbe`（只读 `/sys/bus/usb/devices` 与 `/proc/<pid>/fd`，**不打开设备**）判定真实原因，
+并只给出对应的那一条修复动作：
+
+| 判定 | 含义 | 提示的修复动作 |
+|---|---|---|
+| 未检测到设备 | sysfs 里没有 `3068:0009` | 检查 USB 线缆与供电，重新插拔 |
+| 型号不符 | 有 `3068:xxxx` 但 PID 不是 `0009` | 换用受支持的型号 |
+| 无权限访问 | 设备存在，但设备节点不可读写（含 devtmpfs 未挂载） | 安装上面的 udev 规则后重新插拔 |
+| 设备被占用 | 节点可访问，但被其它进程持有 fd | 关闭提示中列出的进程（会点名 `进程名(pid)`） |
+| 已检测到但打开失败 | 设备在位、可访问、无人占用 | 固件/驱动未就绪，重新插拔或重启 |
+| 无法判定 | 非 Linux / sysfs 不可用 | 退回通用提示 |
+
+探测只在打开**失败后**执行，成功路径没有任何额外开销。实现见 `src/core/UsbProbe.{h,cpp}`，
+判定矩阵的单测见 `tests/test_usbprobe.cpp`。
+
 ## 目录结构
 ```
 ui/CanDebugger/
@@ -179,7 +196,7 @@ ui/CanDebugger/
 │  ├─ main.cpp
 │  ├─ core/  BitTiming, CanDevice, CanFilter, FrameData, FrameBuilder,
 │  │         PeriodicSender, Recorder, Replayer, RingBuffer, RxWorker,
-│  │         RxManager, Statistics
+│  │         RxManager, Statistics, UsbProbe
 │  ├─ model/ FrameListModel, FrameFilterProxyModel
 │  ├─ view/  RealtimePlot (QQuickItem), PlotRing
 │  └─ qml/   Main, Theme, DevicePanel, ReceiveView, SendWorkspace, SendPanel,
@@ -192,7 +209,7 @@ ui/CanDebugger/
 │          test_periodicsender, test_canfilter, test_statistics,
 │          test_periodicsender, test_canfilter, test_statistics, test_plotring,
 │          test_recorder, test_replayer, test_filter_proxy, test_framelist_roles,
-│          test_ring_concurrency；QML：qml/tst_{qml.cpp,panels,runtime}；
+│          test_ring_concurrency, test_usbprobe；QML：qml/tst_{qml.cpp,panels,runtime}；
 │          实机：device_smoke, test_rx_pipeline, device_send_test,
 │          device_periodic_test, device_filter_test, device_merge_test,
 │          device_multichannel_test, device_replay_test, device_stress_test

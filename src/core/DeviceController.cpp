@@ -7,6 +7,7 @@
 
 #include "core/CanDevice.h"
 #include "core/RxManager.h"
+#include "core/UsbProbe.h"
 
 DeviceController::DeviceController(CanDevice *device, RxManager *rx, QObject *parent)
     : QObject(parent)
@@ -125,8 +126,10 @@ void DeviceController::connectDevice(const QVariantList &channels, bool merge)
 
     startWorker([this, channels, merge]() {
         QString err;
+        // VCI_OpenDevice 只返回 0/1，无法自证失败原因；失败时用 sysfs 探测区分
+        // 「没插 / 型号不符 / 没权限 / 被占用 / 固件未就绪」，给出唯一对应的修复动作。
         if (!m_device->isOpen() && !m_device->open(0))
-            err = QStringLiteral("打开设备失败：请检查 USB 权限（需 udev 规则）或设备是否被占用");
+            err = QStringLiteral("打开设备失败：") + UsbProbe::describe(UsbProbe::probe());
         if (err.isEmpty())
             err = configureAll(channels, merge, false);
 

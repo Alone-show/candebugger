@@ -66,6 +66,7 @@ L7 人工验收       部署、热插拔、外部节点互操作
 | `test_framelist_roles` | **新增**：13 个角色完整性、全角色取值、格式/方向文本、ID 掩码、着色、越界、maxRows、时间基准、count 信号 |
 | `test_ring_concurrency` | **新增**：单/多生产者-消费者不变式、并发 vector 收发（TSan 目标） |
 | `test_themecontroller` | **新增**：默认深色、非法模式回退、模式规范化、持久化往返、`toggle` 语义、`auto` 跟随系统深浅、显式模式忽略系统深浅、`darkChanged/modeChanged` 触发时机 |
+| `test_usbprobe` | **新增**：假 sysfs/dev/proc 树的打开失败归因——空树→未检测到、非 ZLG 设备与接口节点忽略、其它 ZLG PID→型号不符（多型号去重列举）、节点缺失/`chmod 0000`→无权限、可访问无占用→在位、他人持有→占用（点名进程）、本进程持有不列为占用者、仅本进程持有→提示句柄未释放、双设备计数与卡索引越界、sysfs 缺失→退回原兜底文案、缺 busnum→不可访问且不打印节点占位符、文案含具体设备节点 |
 
 ### L2 QML 测试（`tst_qml`，offscreen）
 
@@ -97,25 +98,38 @@ L7 人工验收       部署、热插拔、外部节点互操作
 - 覆盖率：`build-cov` + lcov，L1+L2
 - 静态分析：cppcheck `--enable=warning,performance,portability --library=qt`
 
+### L7 人工验收
+
+| 场景 | 期望 |
+|---|---|
+| 拔掉设备点「连接设备」 | 提示「未检测到 USBCANFD 设备（3068:0009）…检查线缆与供电」，**不得**再提示权限/占用 |
+| 未装 udev 规则时点「连接设备」 | 提示「已检测到设备（节点 /dev/bus/usb/B/DDD），但当前用户无法访问…」并给出 udev 命令 |
+| 装好 udev 规则后点「连接设备」 | 正常连接并在位；失败路径不触发探测 |
+| 另一进程已持有设备时点「连接设备」 | 提示「设备已被其它程序占用：进程名(pid)」并点名具体进程 |
+| 插入其它 ZLG 型号（PID≠0009） | 提示「检测到 ZLG 设备 3068:xxxx…型号不符」 |
+
 ---
 
 ## 5. 新增/改动文件
 
 ```
 CanDebugger/
-├─ CMakeLists.txt                         # + ASan/TSan/覆盖选项、3 新单测、tst_qml、3 实机测试
+├─ CMakeLists.txt                         # + ASan/TSan/覆盖选项、4 新单测、tst_qml、3 实机测试
 ├─ scripts/run_all_tests.sh               # L1/L2/L4/L5 编排（release|asan|tsan|coverage|all）
 ├─ scripts/run_hw_tests.sh                # L3 实机串行编排
 ├─ tests/
 │  ├─ test_filter_proxy.cpp               # 新增
 │  ├─ test_framelist_roles.cpp            # 新增
 │  ├─ test_ring_concurrency.cpp           # 新增
+│  ├─ test_usbprobe.cpp                   # 新增（打开失败归因）
 │  ├─ device_merge_test.cpp               # 新增
 │  ├─ device_multichannel_test.cpp        # 新增
 │  ├─ device_stress_test.cpp              # 新增
 │  ├─ qml/tst_qml.cpp, tst_panels.qml, tst_runtime.qml   # 新增
 │  └─ test_{bittiming,framebuilder,recorder,replayer,statistics}.cpp  # 补强
 ├─ src/core/RingBuffer.{h,cpp}            # QMutex → std::mutex（见 第 8 节 发现 1）
+├─ src/core/UsbProbe.{h,cpp}              # 新增（打开失败归因：sysfs + /proc 反查）
+├─ src/core/DeviceController.cpp          # 失败文案接入 UsbProbe
 └─ TEST_PLAN.md                           # 本文档
 ```
 

@@ -62,6 +62,8 @@ add_library(candbg_core STATIC
     src/core/Statistics.h
     src/core/ThemeController.cpp
     src/core/ThemeController.h
+    src/core/UsbProbe.cpp
+    src/core/UsbProbe.h
     src/model/FrameFilterProxyModel.cpp
     src/model/FrameFilterProxyModel.h
     src/model/FrameListModel.cpp
@@ -166,6 +168,10 @@ if(CANDBG_BUILD_TESTS)
         add_executable(test_themecontroller tests/test_themecontroller.cpp)
         target_link_libraries(test_themecontroller PRIVATE candbg_core Qt5::Test)
         add_test(NAME themecontroller COMMAND test_themecontroller)
+
+        add_executable(test_usbprobe tests/test_usbprobe.cpp)
+        target_link_libraries(test_usbprobe PRIVATE candbg_core Qt5::Test)
+        add_test(NAME usbprobe COMMAND test_usbprobe)
     endif()
 
     # ---- QML 组件测试（QtQuickTest + offscreen） ----

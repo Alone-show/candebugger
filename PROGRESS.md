@@ -533,6 +533,36 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 
 ---
 
+## 步骤 18 — 「打开失败」精准判定设备是否连接 ✅ 完成（离线单测 + 实机探测验证）
+- 背景：`VCI_OpenDevice` 只返回 `0/1`，不区分失败原因；`DeviceController` 的失败文案是写死的
+  「请检查 USB 权限（需 udev 规则）或设备是否被占用」，把「没插 / 型号不符 / 没权限 / 被占用 /
+  固件未就绪」五种情况糊成一句猜谜，用户容易按错误方向排查（例如设备根本没插却去装 udev 规则）。
+- 改动：
+  - 新增 `src/core/UsbProbe.{h,cpp}`：只读 sysfs(`/sys/bus/usb/devices`) + `/proc/<pid>/fd`，
+    **不打开设备**（另一进程占用时照样能探测，且无副作用）。`sysRoot/devRoot/procRoot` 可注入 →
+    可用假目录树单测。
+  - 判定优先级：`Absent`（无 3068:*）→ `WrongModel`（有 3068:xxxx 但 PID≠0009）→
+    `AccessDenied`（节点不可读写，含 devtmpfs 未挂载）→ `Busy`（节点可访问但被其它进程持有）
+    → `Present`（可访问、无占用，open 仍失败）→ `Unsupported`（非 Linux / sysfs 不可用）。
+  - 占用者用 `/proc/<pid>/fd` 反查：libusb 会话全程持有 devnode fd，因此能点名进程 `comm(pid)`；
+    本进程自身单独记为 `heldBySelf`，不列进「占用者」，改提示「上次打开未释放」。
+  - `describe()` 按判定给唯一对应的修复动作（装 udev 规则 / 关闭某进程 / 重新插拔）；
+    多设备时补「共检测到 N 个设备」，请求卡索引越界时单独报出。
+  - 接线只改一处：`DeviceController::connectDevice` 的失败分支
+    `err = "打开设备失败：" + UsbProbe::describe(UsbProbe::probe())`。**成功路径零改动、零开销**。
+- 验证：
+  - 新增 `tests/test_usbprobe`（13 个用例，假 sysfs/dev/proc 树）：空树→Absent、非 ZLG 设备
+    与接口节点被忽略、其它 ZLG PID→WrongModel（多型号去重并全部列出）、节点缺失/`chmod 0000`
+    →AccessDenied、可访问无占用→Present、他人持有→Busy 且点名、本进程持有不列为占用者、
+    仅本进程持有→提示句柄未释放、双设备计数+索引越界、sysfs 缺失→退回原兜底文案、
+    缺 busnum→不可访问且不打印节点占位符。
+  - `ctest` **15/15 通过**（原 14 项 + `usbprobe`）。
+  - 实机探测复核（真实 `/sys`）：拔掉设备时 `Absent`；插上后
+    `matched=1 nodes=(/dev/bus/usb/001/053)`；另起一个持有设备的进程后
+    `Busy holders=(holder(856618))`，文案正确点名占用者。
+
+---
+
 ## 实机验证汇总
 - 已安装 udev 规则：`/etc/udev/rules.d/50-usbcanfd.rules`，设备节点变为 `crw-rw-rw- root:users`，普通用户可访问
 - `device_smoke`、`test_rx_pipeline`、`device_send_test`、`device_filter_test`、`device_replay_test`、
@@ -544,6 +574,8 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 - 发送链路自收验证：单帧 CAN/FD 字段一致；定时发送按 100ms 周期发出并可启停
 - 滤波实机验证：硬件验收滤波有效滤除不匹配 ID 的总线帧（本机回环不受影响）；软件模型滤波即时生效
 - 统计实机联动：帧计数/方向/总线流量随活动变化合理
+- 打开失败诊断实机探测（步骤 18）：设备在线时 `Present`、`nodes=(/dev/bus/usb/001/053)`；
+  拔掉设备 `Absent`；另一进程持有设备时 `Busy holders=(holder(pid))` 并点名占用进程
 
 ## 待办 / 下一步
 - [x] 安装 udev 规则并实机验证步骤 1–3
@@ -554,6 +586,7 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
 - [ ] 实机高帧率下核验绘图流畅度与 CPU 占用（1000 点/秒验收项，当前为离线/结构验证）
 - [ ] 接外部 CAN 节点，核验标准公式 500k/2M 的互操作性（对端若用 demo 参数可能不匹配）
 - [x] 记录周期性发送帧（步骤 14：软件定时发送已按 `FrameBuilder` 口径写入 `Recorder`）
+- [x] 「打开失败」精准判定设备连接状态（步骤 18：`UsbProbe` + `test_usbprobe`）
 
 ## 已知说明
 - 收发共用设备句柄，`CanDevice` 用互斥锁串行化；接收线程持锁最长 `timeout`(5ms)
@@ -691,4 +724,15 @@ bps       = clk / ((brp + 1) * (tseg1 + tseg2 + 3))
     - **注意事项**：对端流量阵发、`VCI_Transmit` 的 ACK 判据有抖动，标定/扫描以 ACK 权重更高、
       被动有效帧为辅；总线上的对端速率与本机不一致时，本机可能进入错误态导致发送失败
       （如对端 1M、本机 500k 时 `device_multichannel_test` 的 ch0 会失败）。
+31. **打开失败的判定边界（步骤 18，`UsbProbe`）**：
+    - 探测是**辅助诊断**，不是打开的替代：只在 `VCI_OpenDevice` 返回失败后才跑；成功路径不探测。
+    - 设备枚举顺序只按 sysfs 目录名（`QDir::NoSort` 未排序），与 SDK 的 `Card` 索引
+      **没有保证的映射关系**。单设备场景无歧义；多设备时仅报「共检测到 N 个」与索引越界，
+      不声称「卡 0 就是某个 sysfs 节点」。
+    - `Busy` 的判据是「devnode 被某进程持有 fd」。实测该 SDK 在同一进程/多进程下**仍可能
+      打开成功**（usbfs 允许多次 open），所以 `Busy` 只在真失败时作为归因提示，不代表必然打不开。
+    - `AccessDenied` 同时覆盖「节点权限不足」与「`/dev/bus/usb` 节点缺失（devtmpfs 未挂载）」，
+      两者修复动作一致（装 udev 规则 / 重新插拔）。
+    - sysfs 不可用（非 Linux、未挂载）→ `Unsupported`，退回原兜底文案，不猜测原因。
+    - 后续若需实时状态指示（未插/已就绪徽标），需加轮询定时器；本次按约定**未做**。
 
